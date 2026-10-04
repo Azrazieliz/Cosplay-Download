@@ -11,8 +11,8 @@ android {
         applicationId = "com.azrael.galleryflow"
         minSdk = 29
         targetSdk = 35
-        versionCode = 8
-        versionName = "0.5.1"
+        versionCode = 9
+        versionName = "0.5.2"
         testInstrumentationRunner = "android.app.Instrumentation"
     }
 
