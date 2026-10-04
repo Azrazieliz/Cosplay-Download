@@ -6,7 +6,7 @@ import java.net.URI
 import java.security.MessageDigest
 import java.util.Locale
 
-private abstract class DirectGalleryAdapter(
+internal abstract class DirectGalleryAdapter(
     protected val http: HttpClient,
     override val source: SourceId,
     private val host: String,
