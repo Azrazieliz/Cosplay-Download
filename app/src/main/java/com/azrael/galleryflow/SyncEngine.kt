@@ -3,6 +3,8 @@ package com.azrael.galleryflow
 import android.content.Context
 
 class SyncEngine(private val context: Context) {
+    private enum class ProcessResult { COMPLETE, PARTIAL, PROVIDER_REQUIRED }
+
     data class Stats(
         var entities: Int = 0,
         var galleriesSeen: Int = 0,
@@ -12,15 +14,14 @@ class SyncEngine(private val context: Context) {
         var errors: Int = 0
     )
 
-    private val http = HttpClient()
-
     fun run(mode: SyncMode, progress: (String) -> Unit = {}): Stats {
         val stats = Stats()
         if (!SyncControl.tryStart(mode, queueLiveIfBusy = true)) return stats
         val db = GalleryDb(context)
-        val files = MediaStoreFiles(context, http)
+        val files = MediaStoreFiles(context, HttpClient())
         val flow = FlowLinkEmitter(context, db)
         try {
+            db.ensureEntities(AdapterRegistry.defaultEntities())
             SyncControl.setMode(mode)
             when (mode) {
                 SyncMode.LIVE -> runLive(db, files, flow, stats, progress)
@@ -49,7 +50,7 @@ class SyncEngine(private val context: Context) {
         stats: Stats,
         progress: (String) -> Unit
     ) {
-        val entities = db.listEntities().filter { it.selected && it.liveEnabled }
+        val entities = orderedEntities(db.listEntities().filter { it.selected && it.liveEnabled })
         stats.entities = maxOf(stats.entities, entities.size)
         for ((entityIndex, entity) in entities.withIndex()) {
             if (!SyncControl.checkpoint()) return
@@ -62,23 +63,37 @@ class SyncEngine(private val context: Context) {
             SyncControl.updateMessage(message)
             progress(message)
             try {
-                val galleries = adapter.enumerateGalleries(entity.toSourceEntity()).toList()
-                val newest = galleries.firstOrNull()?.stableId
+                val iterator = adapter.enumerateGalleries(entity.toSourceEntity()).iterator()
                 if (entity.liveCursor.isNullOrBlank()) {
+                    val newest = if (iterator.hasNext()) iterator.next().stableId else null
                     db.setLiveCursor(entity.source, entity.entityId, newest)
                     progress(entity.displayName + ": Live baseline established")
                     continue
                 }
-                val newOnes = galleries.takeWhile { it.stableId != entity.liveCursor }
+
+                val newOnes = mutableListOf<GalleryRef>()
+                while (iterator.hasNext()) {
+                    if (!SyncControl.checkpoint()) return
+                    val gallery = iterator.next()
+                    if (gallery.stableId == entity.liveCursor) break
+                    newOnes += gallery
+                }
+
+                var blocked = false
                 for (gallery in newOnes.asReversed()) {
                     if (!SyncControl.checkpoint()) return
-                    if (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
-                        db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
-                    } else {
-                        break
+                    when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
+                        ProcessResult.COMPLETE ->
+                            db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
+                        ProcessResult.PROVIDER_REQUIRED -> {
+                            blocked = true
+                            db.setEntityError(entity.source, entity.entityId, "Provider session required before Live Sync can continue.")
+                            break
+                        }
+                        ProcessResult.PARTIAL -> break
                     }
                 }
-                db.setEntityError(entity.source, entity.entityId, null)
+                if (!blocked) db.setEntityError(entity.source, entity.entityId, null)
             } catch (t: Throwable) {
                 if (SyncControl.isStopping()) return
                 stats.errors++
@@ -94,7 +109,7 @@ class SyncEngine(private val context: Context) {
         stats: Stats,
         progress: (String) -> Unit
     ) {
-        val entities = db.listEntities().filter { it.selected }
+        val entities = orderedEntities(db.listEntities().filter { it.selected })
         stats.entities = maxOf(stats.entities, entities.size)
         for ((entityIndex, entity) in entities.withIndex()) {
             if (!SyncControl.checkpoint()) return
@@ -107,16 +122,53 @@ class SyncEngine(private val context: Context) {
             SyncControl.updateMessage(prefix)
             progress(prefix)
             try {
+                var blocked = false
+                var consecutiveFailures = 0
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
-                    processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
+                    val filesBefore = stats.mediaDownloaded + stats.mediaDeduped
+                    when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
+                        ProcessResult.COMPLETE -> {
+                            consecutiveFailures = 0
+                            db.setEntityError(entity.source, entity.entityId, null)
+                        }
+                        ProcessResult.PROVIDER_REQUIRED -> {
+                            blocked = true
+                            db.setEntityError(
+                                entity.source,
+                                entity.entityId,
+                                "Provider download could not be resolved automatically at " + gallery.title
+                            )
+                            progress("Provider blocked • moving to next source • " + entity.displayName)
+                            break
+                        }
+                        ProcessResult.PARTIAL -> {
+                            val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
+                            if (filesAfter > filesBefore) {
+                                // Partial gallery still made real filesystem progress.
+                                consecutiveFailures = 0
+                            } else {
+                                consecutiveFailures++
+                            }
+                            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                                blocked = true
+                                db.setEntityError(
+                                    entity.source,
+                                    entity.entityId,
+                                    "Stopped after $MAX_CONSECUTIVE_FAILURES zero-file gallery failures; moved to next source."
+                                )
+                                progress("Source produced no files repeatedly • moving on • " + entity.displayName)
+                                break
+                            }
+                        }
+                    }
                     if (serviceQueuedLive(db, files, flow, stats, progress)) {
                         SyncControl.setMode(SyncMode.BACKFILL)
                         SyncControl.updateMessage(prefix)
                         progress("Resuming " + prefix)
                     }
                 }
-                db.setEntityError(entity.source, entity.entityId, null)
+                if (!blocked) db.setEntityError(entity.source, entity.entityId, null)
             } catch (t: Throwable) {
                 if (SyncControl.isStopping()) return
                 stats.errors++
@@ -148,15 +200,16 @@ class SyncEngine(private val context: Context) {
         flow: FlowLinkEmitter,
         stats: Stats,
         progress: (String) -> Unit
-    ): Boolean {
+    ): ProcessResult {
         stats.galleriesSeen++
         db.upsertGallery(ref, TransferState.PENDING)
         return try {
             val (meta, mediaItems) = adapter.fetchGallery(ref)
             db.updateGalleryMeta(meta, mediaItems.size)
             var allComplete = true
+            var providerRequired = false
             for ((position, media) in mediaItems.withIndex()) {
-                if (!SyncControl.checkpoint()) return false
+                if (!SyncControl.checkpoint()) return ProcessResult.PARTIAL
                 db.upsertMedia(entity.entityId, media)
                 val existing = db.media(media.source, media.stableId)
                 if (existing != null && existing.state == TransferState.COMPLETE && files.exists(existing.contentUri)) continue
@@ -167,24 +220,19 @@ class SyncEngine(private val context: Context) {
                 SyncControl.updateMessage(meta.title + " • " + (position + 1) + "/" + mediaItems.size)
                 db.markMediaDownloading(media)
                 try {
-                    val fresh = files.download(entity, meta, media)
-                    val duplicate = db.findCompleteByHash(fresh.sha256)
-                    if (duplicate != null && files.exists(duplicate.contentUri)) {
-                        files.delete(fresh.contentUri)
-                        db.markMediaComplete(
-                            media,
-                            fresh.copy(
-                                contentUri = requireNotNull(duplicate.contentUri),
-                                filename = duplicate.filename ?: fresh.filename
-                            ),
-                            duplicateOf = duplicate.source.wireName + ":" + duplicate.mediaId
-                        )
-                        stats.mediaDeduped++
-                    } else {
-                        db.markMediaComplete(media, fresh)
-                        stats.mediaDownloaded++
-                        flow.mediaDownloaded(entity, meta, media, fresh)
+                    val outcome = files.download(entity, meta, media)
+                    commitDownloaded(entity, meta, media, outcome.primary, db, files, flow, stats)
+                    for (extracted in outcome.extracted) {
+                        db.upsertMedia(entity.entityId, extracted.media)
+                        commitDownloaded(entity, meta, extracted.media, extracted.result, db, files, flow, stats)
                     }
+                } catch (e: InteractiveProviderRequiredException) {
+                    allComplete = false
+                    providerRequired = true
+                    db.setMediaState(media.source, media.stableId, TransferState.INACCESSIBLE)
+                    db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL, e.provider + " session required")
+                    progress("Provider session required • " + e.provider + " • " + meta.title)
+                    break
                 } catch (e: HttpStatusException) {
                     allComplete = false
                     val state = when (e.code) {
@@ -195,7 +243,7 @@ class SyncEngine(private val context: Context) {
                     db.setMediaState(media.source, media.stableId, state)
                     if (e.code == 429) break
                 } catch (t: Throwable) {
-                    if (SyncControl.isStopping() || t is SyncCancelledException) return false
+                    if (SyncControl.isStopping() || t is SyncCancelledException) return ProcessResult.PARTIAL
                     allComplete = false
                     db.setMediaState(media.source, media.stableId, TransferState.RETRYING)
                 }
@@ -211,24 +259,65 @@ class SyncEngine(private val context: Context) {
                 stats.galleriesCompleted++
                 flow.galleryDownloaded(entity, meta)
                 progress("Complete • " + meta.title)
-                true
+                ProcessResult.COMPLETE
             } else {
                 db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL)
-                false
+                if (providerRequired) ProcessResult.PROVIDER_REQUIRED else ProcessResult.PARTIAL
             }
         } catch (e: HttpStatusException) {
             stats.errors++
             val state = if (e.code in listOf(401,403,404,410)) TransferState.INACCESSIBLE else TransferState.RETRYING
             db.setGalleryState(ref.source, ref.stableId, state, e.message)
-            false
+            ProcessResult.PARTIAL
         } catch (t: Throwable) {
-            if (SyncControl.isStopping() || t is SyncCancelledException) return false
+            if (SyncControl.isStopping() || t is SyncCancelledException) return ProcessResult.PARTIAL
             stats.errors++
             db.setGalleryState(ref.source, ref.stableId, TransferState.RETRYING, t.message ?: t.javaClass.simpleName)
-            false
+            ProcessResult.PARTIAL
         }
+    }
+
+    private fun commitDownloaded(
+        entity: EntityRecord,
+        meta: GalleryMeta,
+        media: MediaRef,
+        fresh: DownloadResult,
+        db: GalleryDb,
+        files: MediaStoreFiles,
+        flow: FlowLinkEmitter,
+        stats: Stats
+    ) {
+        val duplicate = db.findCompleteByHash(fresh.sha256)
+        if (duplicate != null && files.exists(duplicate.contentUri)) {
+            files.delete(fresh.contentUri)
+            db.markMediaComplete(
+                media,
+                fresh.copy(
+                    contentUri = requireNotNull(duplicate.contentUri),
+                    filename = duplicate.filename ?: fresh.filename
+                ),
+                duplicateOf = duplicate.source.wireName + ":" + duplicate.mediaId
+            )
+            stats.mediaDeduped++
+        } else {
+            db.markMediaComplete(media, fresh)
+            stats.mediaDownloaded++
+            flow.mediaDownloaded(entity, meta, media, fresh)
+        }
+    }
+
+    private fun orderedEntities(input: List<EntityRecord>): List<EntityRecord> {
+        val order = AdapterRegistry.adapters.mapIndexed { index, adapter -> adapter.source to index }.toMap()
+        return input.sortedWith(
+            compareBy<EntityRecord> { order[it.source] ?: Int.MAX_VALUE }
+                .thenBy { it.displayName.lowercase() }
+        )
     }
 
     private fun EntityRecord.toSourceEntity() =
         SourceEntity(source, entityId, displayName, canonicalUrl, kind)
+
+    companion object {
+        private const val MAX_CONSECUTIVE_FAILURES = 3
+    }
 }

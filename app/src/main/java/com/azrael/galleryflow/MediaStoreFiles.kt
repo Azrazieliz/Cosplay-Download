@@ -7,6 +7,11 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import net.lingala.zip4j.ZipFile
+import java.io.File
+import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import kotlin.math.max
 
@@ -18,21 +23,36 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         }.getOrDefault(false)
     }
 
-    fun download(entity: EntityRecord, gallery: GalleryMeta, media: MediaRef): DownloadResult {
+    fun download(entity: EntityRecord, gallery: GalleryMeta, media: MediaRef): DownloadOutcome {
         if (!SyncControl.checkpoint()) throw SyncCancelledException()
-        http.open(media.url, media.referer).use { response ->
-            val mime = response.contentType?.takeIf { it.startsWith("image/") }
-                ?: media.mimeHint ?: "application/octet-stream"
-            val ext = extensionFor(mime, media.url)
-            val filename = "%04d.%s".format(media.index + 1, ext)
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, filename)
-                put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, relativePath(entity, gallery))
-                put(MediaStore.Downloads.IS_PENDING, 1)
+        val resolved = http.resolveDownloadUrl(media.url, media.referer, media.provider)
+        val resolvedReferer = when (media.provider?.lowercase()) {
+            "terabox" -> "https://www.terabox.com/"
+            "mediafire", "sorafolder", "gofile" -> media.url
+            else -> media.referer
+        }
+        openWithFallback(media, resolved, resolvedReferer).use { response ->
+            val responseMime = response.contentType?.lowercase()
+            if (media.kind == MediaKind.ARCHIVE && responseMime?.startsWith("text/html") == true) {
+                throw InteractiveProviderRequiredException(media.provider ?: "Archive provider", response.finalUrl)
             }
-            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: error("Could not create MediaStore row")
+            if (media.kind == MediaKind.IMAGE && responseMime?.startsWith("text/") == true) {
+                throw AdapterException("Image URL returned HTML/text instead of an image.")
+            }
+            if (media.kind == MediaKind.VIDEO && responseMime?.startsWith("text/") == true) {
+                throw AdapterException("Video URL returned HTML/text instead of a video.")
+            }
+
+            val dispositionName = filenameFromDisposition(response.contentDisposition)
+            val mime = chooseMime(media, response.contentType, dispositionName, response.finalUrl)
+            val ext = extensionFor(mime, dispositionName ?: response.finalUrl, media.kind)
+            val filename = when (media.kind) {
+                MediaKind.ARCHIVE -> dispositionName?.let(::safeFileName)
+                    ?: "archive-%04d.%s".format(media.index + 1, ext)
+                else -> "%04d.%s".format(media.index + 1, ext)
+            }
+
+            val uri = createRow(filename, mime, relativePath(entity, gallery))
             val digest = MessageDigest.getInstance("SHA-256")
             var bytes = 0L
             try {
@@ -47,25 +67,57 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                         bytes += read
                     }
                 }
-                context.contentResolver.update(
-                    uri,
-                    ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
-                    null,
-                    null
-                )
-                return DownloadResult(
+                finishRow(uri)
+                val primary = DownloadResult(
                     contentUri = uri.toString(),
                     filename = filename,
                     mimeType = mime,
                     bytes = bytes,
                     sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte) },
-                    aHash64 = averageHash64(uri)
+                    aHash64 = if (mime.startsWith("image/")) averageHash64(uri) else null
                 )
+                val extracted = if (media.kind == MediaKind.ARCHIVE && isZip(filename, mime)) {
+                    extractZip(entity, gallery, media, uri)
+                } else {
+                    emptyList()
+                }
+                return DownloadOutcome(primary, extracted)
             } catch (t: Throwable) {
                 runCatching { context.contentResolver.delete(uri, null, null) }
                 throw t
             }
         }
+    }
+
+    private fun openWithFallback(
+        media: MediaRef,
+        resolved: String,
+        preferredReferer: String?
+    ): HttpClient.OpenResponse {
+        val referers = linkedSetOf<String?>()
+        referers += preferredReferer
+        if (media.kind == MediaKind.IMAGE || media.kind == MediaKind.VIDEO) {
+            val root = runCatching {
+                val uri = URI(resolved)
+                uri.scheme + "://" + uri.host + "/"
+            }.getOrNull()
+            referers += root
+            referers += null
+        }
+
+        var last: Throwable? = null
+        for (referer in referers) {
+            try {
+                return http.open(resolved, referer)
+            } catch (e: HttpStatusException) {
+                last = e
+                if (e.code !in listOf(401, 403)) throw e
+            } catch (t: Throwable) {
+                last = t
+                break
+            }
+        }
+        throw last ?: AdapterException("Could not open media URL.")
     }
 
     fun delete(contentUri: String?) {
@@ -74,8 +126,110 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         }
     }
 
+    private fun extractZip(
+        entity: EntityRecord,
+        gallery: GalleryMeta,
+        archive: MediaRef,
+        archiveUri: Uri
+    ): List<ExtractedDownload> {
+        val temp = File.createTempFile("galleryflow_", ".zip", context.cacheDir)
+        val createdUris = mutableListOf<Uri>()
+        try {
+            context.contentResolver.openInputStream(archiveUri)!!.use { input ->
+                temp.outputStream().use { output -> input.copyTo(output) }
+            }
+            val zip = ZipFile(temp)
+            if (zip.isEncrypted) {
+                val password = archive.archivePassword?.takeIf { it.isNotBlank() }
+                    ?: throw AdapterException("Encrypted ZIP requires an extraction password.")
+                zip.setPassword(password.toCharArray())
+            }
+
+            val out = mutableListOf<ExtractedDownload>()
+            var extractedIndex = 0
+            for (header in zip.fileHeaders) {
+                if (!SyncControl.checkpoint()) throw SyncCancelledException()
+                if (header.isDirectory) continue
+                val entryName = header.fileName.replace('\\', '/')
+                val ext = entryName.substringAfterLast('.', "").lowercase()
+                val mime = mimeForExtension(ext) ?: continue
+                val kind = if (mime.startsWith("video/")) MediaKind.VIDEO else MediaKind.IMAGE
+                val base = safeFileName(entryName.substringAfterLast('/').ifBlank { "file.$ext" })
+                val filename = "%04d_%04d_%s".format(archive.index + 1, extractedIndex + 1, base)
+                val uri = createRow(filename, mime, relativePath(entity, gallery))
+                createdUris += uri
+                val digest = MessageDigest.getInstance("SHA-256")
+                var bytes = 0L
+                zip.getInputStream(header).use { input ->
+                    context.contentResolver.openOutputStream(uri, "w")!!.use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 4)
+                        while (true) {
+                            if (!SyncControl.checkpoint()) throw SyncCancelledException()
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            digest.update(buffer, 0, read)
+                            bytes += read
+                        }
+                    }
+                }
+                finishRow(uri)
+                val syntheticUrl = "archive:" + archive.normalizedUrl + "#" + entryName
+                val media = MediaRef(
+                    source = archive.source,
+                    stableId = sha256Text(archive.stableId + ":" + entryName).take(24),
+                    galleryStableId = archive.galleryStableId,
+                    index = 100000 + archive.index * 10000 + extractedIndex,
+                    url = syntheticUrl,
+                    normalizedUrl = syntheticUrl,
+                    referer = archive.url,
+                    mimeHint = mime,
+                    kind = kind,
+                    provider = archive.provider
+                )
+                val result = DownloadResult(
+                    contentUri = uri.toString(),
+                    filename = filename,
+                    mimeType = mime,
+                    bytes = bytes,
+                    sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte) },
+                    aHash64 = if (mime.startsWith("image/")) averageHash64(uri) else null
+                )
+                out += ExtractedDownload(media, result)
+                extractedIndex++
+            }
+            if (out.isEmpty()) throw AdapterException("ZIP contained no supported image/video files.")
+            return out
+        } catch (t: Throwable) {
+            createdUris.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
+            throw t
+        } finally {
+            runCatching { temp.delete() }
+        }
+    }
+
+    private fun createRow(filename: String, mime: String, relativePath: String): Uri {
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        return context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: error("Could not create MediaStore row")
+    }
+
+    private fun finishRow(uri: Uri) {
+        context.contentResolver.update(
+            uri,
+            ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) },
+            null,
+            null
+        )
+    }
+
     private fun relativePath(entity: EntityRecord, gallery: GalleryMeta): String =
-        Environment.DIRECTORY_DOWNLOADS + "/GalleryFlow/" +
+        Environment.DIRECTORY_DOWNLOADS + "/Cosplay/GalleryFlow/" +
             safe(entity.source.wireName) + "/" +
             safe(entity.displayName.ifBlank { entity.entityId }) + "/" +
             safe(gallery.stableId + " - " + gallery.title)
@@ -87,13 +241,61 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         .take(120)
         .ifBlank { "unknown" }
 
-    private fun extensionFor(mime: String, url: String): String = when (mime.lowercase()) {
+    private fun safeFileName(value: String): String = value
+        .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        .trim()
+        .take(160)
+        .ifBlank { "file.bin" }
+
+    private fun chooseMime(media: MediaRef, responseMime: String?, filename: String?, url: String): String {
+        val clean = responseMime?.substringBefore(';')?.trim()?.lowercase()
+        if (!clean.isNullOrBlank() && clean != "application/octet-stream") return clean
+        media.mimeHint?.takeIf { it.isNotBlank() }?.let { return it }
+        val source = filename ?: url
+        val ext = source.substringBefore('?').substringAfterLast('.', "").lowercase()
+        return mimeForExtension(ext)
+            ?: if (media.kind == MediaKind.ARCHIVE) "application/zip" else "application/octet-stream"
+    }
+
+    private fun extensionFor(mime: String, source: String, kind: MediaKind): String = when (mime.lowercase()) {
         "image/jpeg" -> "jpg"
         "image/png" -> "png"
         "image/webp" -> "webp"
         "image/gif" -> "gif"
         "image/avif" -> "avif"
-        else -> url.substringBefore('?').substringAfterLast('.', "bin").take(6).lowercase()
+        "video/mp4" -> "mp4"
+        "video/webm" -> "webm"
+        "video/quicktime" -> "mov"
+        "application/zip", "application/x-zip-compressed" -> "zip"
+        else -> {
+            val ext = source.substringBefore('?').substringAfterLast('.', "").lowercase().take(8)
+            if (ext.isNotBlank()) ext else if (kind == MediaKind.ARCHIVE) "zip" else "bin"
+        }
+    }
+
+    private fun filenameFromDisposition(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE).find(value)?.groupValues?.get(1)?.let {
+            return runCatching { URLDecoder.decode(it.trim(), StandardCharsets.UTF_8.name()) }.getOrDefault(it.trim())
+        }
+        return Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
+            .find(value)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun isZip(filename: String, mime: String): Boolean =
+        filename.endsWith(".zip", true) || mime.contains("zip", true)
+
+    private fun mimeForExtension(ext: String): String? = when (ext.lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        "avif" -> "image/avif"
+        "mp4", "m4v" -> "video/mp4"
+        "webm" -> "video/webm"
+        "mov" -> "video/quicktime"
+        "zip" -> "application/zip"
+        else -> null
     }
 
     private fun averageHash64(uri: Uri): String? = runCatching {
@@ -127,6 +329,10 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
             }
         }
     }.getOrNull()
+
+    private fun sha256Text(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 
     private inline fun <T> Bitmap.useBitmap(block: (Bitmap) -> T): T {
         try { return block(this) } finally { if (!isRecycled) recycle() }
