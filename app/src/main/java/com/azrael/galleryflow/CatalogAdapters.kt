@@ -125,10 +125,11 @@ class FourKhdAdapter(private val http: HttpClient) : SourceAdapter {
             url = chosen,
             normalizedUrl = normalizedUrl(chosen),
             referer = gallery.canonicalUrl,
-            mimeHint = "application/zip",
+            mimeHint = null,
             kind = MediaKind.ARCHIVE,
             provider = "TeraBox",
-            archivePassword = "4KHD"
+            archivePassword = "4KHD",
+            nameHint = title
         )
         return meta to listOf(media)
     }
@@ -238,13 +239,12 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
             return meta to listOf(
                 MediaRef(
                     source, shaText("archive:$chosen").take(24), gallery.stableId, 0,
-                    chosen, normalizedUrl(chosen), gallery.canonicalUrl, "application/zip",
-                    MediaKind.ARCHIVE, "TeraBox", null
+                    chosen, normalizedUrl(chosen), gallery.canonicalUrl, null,
+                    MediaKind.ARCHIVE, "TeraBox", null, meta.title
                 )
             )
         }
 
-        val prefix = "/photos/" + gallery.stableId + "/"
         val media = linkedMapOf<String, MediaRef>()
         var index = 0
         for ((pageUrl, pageDoc) in docs) {
@@ -255,7 +255,7 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
                 val url = runCatching { URI(pageDoc.baseUri()).resolve(src).toString() }.getOrDefault(src)
                 val uri = runCatching { URI(url) }.getOrNull() ?: continue
                 val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
-                if (host != "cdn.buondua.net" || !uri.path.startsWith(prefix)) continue
+                if (host != "cdn.buondua.net" || !uri.path.contains("/photos/")) continue
                 val norm = normalizedUrl(url)
                 if (norm in media) continue
                 media[norm] = MediaRef(
@@ -369,22 +369,24 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
         )
 
         val candidates = providerLinks(doc)
-        val chosen = candidates.sortedBy { providerPriority(it.second) }.firstOrNull()
+            .sortedBy { providerPriority(it.second) }
+        val chosen = candidates.firstOrNull()
             ?: throw AdapterException("CosplayTele post exposed no supported MediaFire/SoraFolder/Gofile/Telegram download link.")
-        val provider = chosen.second
         val password = extractPassword(doc)
         val media = MediaRef(
             source = source,
-            stableId = shaText("archive:" + chosen.first).take(24),
+            stableId = shaText("archive:" + gallery.stableId).take(24),
             galleryStableId = gallery.stableId,
             index = 0,
             url = chosen.first,
             normalizedUrl = normalizedUrl(chosen.first),
             referer = gallery.canonicalUrl,
-            mimeHint = "application/zip",
+            mimeHint = null,
             kind = MediaKind.ARCHIVE,
-            provider = provider,
-            archivePassword = password
+            provider = chosen.second,
+            archivePassword = password,
+            nameHint = title,
+            mirrors = candidates.drop(1).map { RemoteMirror(it.first, it.second) }
         )
         return meta to listOf(media)
     }
@@ -432,8 +434,8 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
     }
 
     private fun providerPriority(provider: String): Int = when (provider) {
-        "MediaFire" -> 0
-        "Gofile" -> 1
+        "Gofile" -> 0
+        "MediaFire" -> 1
         "SoraFolder" -> 2
         "Telegram" -> 3
         else -> 9
