@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 3) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 4) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -91,6 +91,22 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
                    SET last_error=NULL
                    WHERE source IN ('4khd','buondua','cosplaytele')"""
             )
+        }
+        if (oldVersion < 4) {
+            // Previous test builds could catalogue hundreds of failures without saving a file.
+            // Keep real completed media only and restart incomplete discovery cleanly.
+            db.execSQL("DELETE FROM media WHERE state!='complete' OR content_uri IS NULL")
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM media m
+                     WHERE m.source=galleries.source
+                       AND m.gallery_id=galleries.gallery_id
+                       AND m.state='complete'
+                       AND m.content_uri IS NOT NULL
+                   )"""
+            )
+            db.execSQL("UPDATE entities SET last_error=NULL, live_cursor=NULL")
         }
     }
 
