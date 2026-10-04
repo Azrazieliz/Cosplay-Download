@@ -25,7 +25,12 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
     fun download(entity: EntityRecord, gallery: GalleryMeta, media: MediaRef): DownloadOutcome {
         if (!SyncControl.checkpoint()) throw SyncCancelledException()
         val resolved = http.resolveDownloadUrl(media.url, media.referer, media.provider)
-        http.open(resolved, media.referer).use { response ->
+        val resolvedReferer = when (media.provider?.lowercase()) {
+            "terabox" -> "https://www.terabox.com/"
+            "mediafire", "sorafolder", "gofile" -> media.url
+            else -> media.referer
+        }
+        http.open(resolved, resolvedReferer).use { response ->
             val responseMime = response.contentType?.lowercase()
             if (media.kind == MediaKind.ARCHIVE && responseMime?.startsWith("text/html") == true) {
                 throw InteractiveProviderRequiredException(media.provider ?: "Archive provider", response.finalUrl)
