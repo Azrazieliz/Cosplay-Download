@@ -105,6 +105,26 @@ internal fun directPageAssets(doc: Document, referer: String): List<DirectPageAs
         val height = img.attr("height").toIntOrNull()
         if (width != null && height != null && width < 200 && height < 200) continue
 
+        // If the thumbnail is wrapped in a link to an original image, the anchor pass
+        // already captured the better file. Do not save the thumbnail as a second asset.
+        val linkedOriginal = img.parents().firstOrNull { parent ->
+            parent.tagName() == "a" &&
+                parent.hasAttr("href") &&
+                (imageMime(absoluteUrl(parent, "href")) != null || videoMime(absoluteUrl(parent, "href")) != null)
+        }
+        if (linkedOriginal != null) continue
+
+        var addedPreferred = false
+        for (attr in listOf("data-original", "data-full", "data-src", "data-lazy-src", "data-url")) {
+            val raw = img.attr(attr).trim()
+            if (raw.isNotBlank()) {
+                add(raw, MediaKind.IMAGE, allowUnknownImage = true)
+                addedPreferred = true
+                break
+            }
+        }
+        if (addedPreferred) continue
+
         val srcset = img.attr("srcset").trim()
         if (srcset.isNotBlank()) {
             val best = srcset.split(',').mapNotNull { item ->
@@ -116,16 +136,14 @@ internal fun directPageAssets(doc: Document, referer: String): List<DirectPageAs
                     ?.toDoubleOrNull() ?: 0.0
                 score to candidate
             }.maxByOrNull { it.first }?.second
-            if (!best.isNullOrBlank()) add(best, MediaKind.IMAGE, allowUnknownImage = true)
-        }
-
-        for (attr in listOf("data-original", "data-full", "data-src", "data-lazy-src", "data-url", "src")) {
-            val raw = img.attr(attr).trim()
-            if (raw.isNotBlank()) {
-                add(raw, MediaKind.IMAGE, allowUnknownImage = true)
-                break
+            if (!best.isNullOrBlank()) {
+                add(best, MediaKind.IMAGE, allowUnknownImage = true)
+                continue
             }
         }
+
+        val raw = img.attr("src").trim()
+        if (raw.isNotBlank()) add(raw, MediaKind.IMAGE, allowUnknownImage = true)
     }
 
     for (element in doc.select("video[src],video source[src],source[type^=video][src],a[href$=.mp4],a[href*=.mp4?],a[href$=.webm],a[href*=.webm?]")) {
