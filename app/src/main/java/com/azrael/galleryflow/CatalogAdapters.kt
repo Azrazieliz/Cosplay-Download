@@ -38,6 +38,130 @@ private fun imageMime(url: String): String? {
     }
 }
 
+private fun videoMime(url: String): String? {
+    val p = runCatching { URI(url).path.lowercase(Locale.ROOT) }.getOrDefault(url.lowercase(Locale.ROOT))
+    return when {
+        p.endsWith(".mp4") || p.endsWith(".m4v") -> "video/mp4"
+        p.endsWith(".webm") -> "video/webm"
+        p.endsWith(".mov") -> "video/quicktime"
+        else -> null
+    }
+}
+
+internal data class DirectPageAsset(
+    val url: String,
+    val referer: String,
+    val kind: MediaKind,
+    val mime: String?
+)
+
+internal fun directPageAssets(doc: Document, referer: String): List<DirectPageAsset> {
+    val found = linkedMapOf<String, DirectPageAsset>()
+
+    fun excluded(url: String): Boolean {
+        val lower = url.lowercase(Locale.ROOT)
+        val host = runCatching { URI(url).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+        if (host.contains("mediafire.com") || host.contains("terabox") ||
+            host.contains("sorafolder.com") || host.contains("gofile.io") ||
+            host == "t.me" || host.endsWith(".t.me")
+        ) return true
+        return listOf(
+            "logo", "favicon", "avatar", "emoji", "sprite", "pixel",
+            "banner", "/ads/", "/ad/", "advert", "loading.gif", "placeholder"
+        ).any { it in lower }
+    }
+
+    fun add(raw: String, kindHint: MediaKind? = null, allowUnknownImage: Boolean = false) {
+        if (raw.isBlank() || raw.startsWith("data:", true) || raw.startsWith("blob:", true)) return
+        val absolute = runCatching { URI(referer).resolve(raw.trim()).toString() }.getOrDefault(raw.trim())
+        if (!absolute.startsWith("http://") && !absolute.startsWith("https://")) return
+        if (excluded(absolute)) return
+
+        val image = imageMime(absolute)
+        val video = videoMime(absolute)
+        val kind = when {
+            video != null -> MediaKind.VIDEO
+            image != null -> MediaKind.IMAGE
+            kindHint == MediaKind.VIDEO -> MediaKind.VIDEO
+            kindHint == MediaKind.IMAGE && allowUnknownImage -> MediaKind.IMAGE
+            else -> return
+        }
+        val mime = if (kind == MediaKind.VIDEO) video else image
+        val key = normalizedUrl(absolute)
+        found.putIfAbsent(key, DirectPageAsset(absolute, referer, kind, mime))
+    }
+
+    // Linked originals/lightbox targets are preferable to thumbnails.
+    for (a in doc.select("main a[href],article a[href],.entry-content a[href],.post-content a[href],.content a[href]")) {
+        add(absoluteUrl(a, "href"))
+    }
+
+    val scopedImages = doc.select(
+        "main img,article img,.entry-content img,.post-content img,.content img,.gallery img,.photos img"
+    )
+    val images = if (scopedImages.isNotEmpty()) scopedImages else doc.select("img")
+    for (img in images) {
+        val width = img.attr("width").toIntOrNull()
+        val height = img.attr("height").toIntOrNull()
+        if (width != null && height != null && width < 200 && height < 200) continue
+
+        val srcset = img.attr("srcset").trim()
+        if (srcset.isNotBlank()) {
+            val best = srcset.split(',').mapNotNull { item ->
+                val bits = item.trim().split(Regex("\\s+"))
+                val candidate = bits.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val score = bits.getOrNull(1)
+                    ?.removeSuffix("w")
+                    ?.removeSuffix("x")
+                    ?.toDoubleOrNull() ?: 0.0
+                score to candidate
+            }.maxByOrNull { it.first }?.second
+            if (!best.isNullOrBlank()) add(best, MediaKind.IMAGE, allowUnknownImage = true)
+        }
+
+        for (attr in listOf("data-original", "data-full", "data-src", "data-lazy-src", "data-url", "src")) {
+            val raw = img.attr(attr).trim()
+            if (raw.isNotBlank()) {
+                add(raw, MediaKind.IMAGE, allowUnknownImage = true)
+                break
+            }
+        }
+    }
+
+    for (element in doc.select("video[src],video source[src],source[type^=video][src],a[href$=.mp4],a[href*=.mp4?],a[href$=.webm],a[href*=.webm?]")) {
+        val raw = if (element.hasAttr("src")) element.attr("src") else element.attr("href")
+        add(raw, MediaKind.VIDEO)
+    }
+
+    // Some gallery scripts hold the original URLs without rendering them as anchors.
+    val mediaUrlRegex = Regex(
+        """https?://[^\s"'<>\\]+\.(?:jpe?g|png|webp|gif|avif|mp4|m4v|webm|mov)(?:\?[^\s"'<>\\]*)?""",
+        RegexOption.IGNORE_CASE
+    )
+    for (match in mediaUrlRegex.findAll(doc.html())) add(match.value.replace("&amp;", "&"))
+
+    return found.values.toList()
+}
+
+private fun mediaRefs(
+    source: SourceId,
+    galleryId: String,
+    assets: List<DirectPageAsset>
+): List<MediaRef> = assets.mapIndexed { index, asset ->
+    val norm = normalizedUrl(asset.url)
+    MediaRef(
+        source = source,
+        stableId = shaText(asset.kind.name + ":" + norm).take(24),
+        galleryStableId = galleryId,
+        index = index,
+        url = asset.url,
+        normalizedUrl = norm,
+        referer = asset.referer,
+        mimeHint = asset.mime,
+        kind = asset.kind
+    )
+}
+
 private fun titleOf(doc: Document, fallback: String): String =
     doc.selectFirst("h1,h2,h3")?.text()?.trim()?.takeIf { it.isNotBlank() }
         ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.trim()?.takeIf { it.isNotBlank() }
@@ -47,7 +171,7 @@ private fun titleOf(doc: Document, fallback: String): String =
 class FourKhdAdapter(private val http: HttpClient) : SourceAdapter {
     override val source = SourceId.FOUR_K_HD
     override val enabled = true
-    override val statusLabel = "Enabled • whole-site • TeraBox archives"
+    override val statusLabel = "Enabled • direct album images • TeraBox fallback"
 
     override fun defaultEntities(): List<SourceEntity> = listOf(
         SourceEntity(source, "site:cosplay", "4KHD — cosplay", "https://www.4khd.com/pages/cosplay", "site"),
@@ -103,34 +227,72 @@ class FourKhdAdapter(private val http: HttpClient) : SourceAdapter {
     }
 
     override fun fetchGallery(gallery: GalleryRef): Pair<GalleryMeta, List<MediaRef>> {
-        val doc = http.document(gallery.canonicalUrl)
-        val title = titleOf(doc, gallery.title)
+        val docs = linkedMapOf<String, Document>()
+        val first = http.document(gallery.canonicalUrl)
+        docs[gallery.canonicalUrl] = first
+
+        for (pageUrl in galleryPages(first, gallery.canonicalUrl)) {
+            if (!SyncControl.checkpoint()) throw SyncCancelledException()
+            if (pageUrl !in docs) docs[pageUrl] = http.document(pageUrl, gallery.canonicalUrl)
+        }
+
+        val title = titleOf(first, gallery.title)
         val meta = GalleryMeta(
             source, gallery.stableId, gallery.entityStableId, gallery.canonicalUrl,
-            title, emptyList(), gallery.publishedAt, listOf(gallery.canonicalUrl)
+            title, emptyList(), gallery.publishedAt, docs.keys.toList()
         )
-        val links = doc.select("a[href]").mapNotNull { a ->
+
+        val direct = docs.flatMap { (pageUrl, pageDoc) -> directPageAssets(pageDoc, pageUrl) }
+            .distinctBy { normalizedUrl(it.url) }
+        if (direct.isNotEmpty()) {
+            return meta to mediaRefs(source, gallery.stableId, direct)
+        }
+
+        // Fallback only when the site did not expose any browsable gallery media.
+        val links = first.select("a[href]").mapNotNull { a ->
             val href = absoluteUrl(a, "href")
             val text = a.text().lowercase(Locale.ROOT)
             val host = runCatching { URI(href).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
             if ("terabox" in text || "terabox" in host || host == "m.4khd.com") href else null
         }.distinct()
-        if (links.isEmpty()) throw AdapterException("4KHD gallery exposed no TeraBox archive link.")
+        if (links.isEmpty()) throw AdapterException("4KHD gallery exposed neither direct media nor a TeraBox fallback.")
+
         val chosen = links.first()
-        val media = MediaRef(
-            source = source,
-            stableId = shaText("archive:$chosen").take(24),
-            galleryStableId = gallery.stableId,
-            index = 0,
-            url = chosen,
-            normalizedUrl = normalizedUrl(chosen),
-            referer = gallery.canonicalUrl,
-            mimeHint = "application/zip",
-            kind = MediaKind.ARCHIVE,
-            provider = "TeraBox",
-            archivePassword = "4KHD"
+        return meta to listOf(
+            MediaRef(
+                source = source,
+                stableId = shaText("archive:$chosen").take(24),
+                galleryStableId = gallery.stableId,
+                index = 0,
+                url = chosen,
+                normalizedUrl = normalizedUrl(chosen),
+                referer = gallery.canonicalUrl,
+                mimeHint = "application/zip",
+                kind = MediaKind.ARCHIVE,
+                provider = "TeraBox",
+                archivePassword = "4KHD"
+            )
         )
-        return meta to listOf(media)
+    }
+
+    private fun galleryPages(first: Document, baseUrl: String): List<String> {
+        val base = URI(baseUrl)
+        val basePath = base.path.trimEnd('/')
+        return first.select("a[href]").mapNotNull { a ->
+            val href = absoluteUrl(a, "href")
+            val uri = runCatching { URI(href) }.getOrNull() ?: return@mapNotNull null
+            if (uri.host?.lowercase(Locale.ROOT) !in setOf("4khd.com", "www.4khd.com")) return@mapNotNull null
+            val path = uri.path.trimEnd('/')
+            val suffix = if (path.startsWith(basePath + "/")) path.removePrefix(basePath + "/") else ""
+            val page = suffix.toIntOrNull()
+                ?: if (path == basePath) {
+                    Regex("(?:^|&)(?:page|p)=(\\d+)").find(uri.query.orEmpty())
+                        ?.groupValues?.get(1)?.toIntOrNull()
+                } else null
+            if (page == null || page <= 1) null else page to href
+        }.distinctBy { it.second }
+            .sortedBy { it.first }
+            .map { it.second }
     }
 
     private fun nextListing(doc: Document, baseUrl: String, visited: Set<String>): String? {
@@ -286,7 +448,7 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
 class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
     override val source = SourceId.COSPLAYTELE
     override val enabled = true
-    override val statusLabel = "Enabled • whole-site • MediaFire/SoraFolder/Gofile archives"
+    override val statusLabel = "Enabled • direct images/videos • archive fallback"
 
     override fun defaultEntities(): List<SourceEntity> = listOf(
         SourceEntity(source, "site:all", "CosplayTele — entire site", "https://cosplaytele.com/", "site")
@@ -339,34 +501,70 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
     }
 
     override fun fetchGallery(gallery: GalleryRef): Pair<GalleryMeta, List<MediaRef>> {
-        val doc = http.document(gallery.canonicalUrl)
-        val title = titleOf(doc, gallery.title)
-        val tags = doc.select("a[rel=tag],a[href*=/category/],a[href*=/tag/]")
+        val docs = linkedMapOf<String, Document>()
+        val first = http.document(gallery.canonicalUrl)
+        docs[gallery.canonicalUrl] = first
+
+        for (pageUrl in postPages(first, gallery.canonicalUrl)) {
+            if (!SyncControl.checkpoint()) throw SyncCancelledException()
+            if (pageUrl !in docs) docs[pageUrl] = http.document(pageUrl, gallery.canonicalUrl)
+        }
+
+        val title = titleOf(first, gallery.title)
+        val tags = first.select("a[rel=tag],a[href*=/category/],a[href*=/tag/]")
             .map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
         val meta = GalleryMeta(
             source, gallery.stableId, gallery.entityStableId, gallery.canonicalUrl,
-            title, tags, published(doc) ?: gallery.publishedAt, listOf(gallery.canonicalUrl)
+            title, tags, published(first) ?: gallery.publishedAt, docs.keys.toList()
         )
 
-        val candidates = providerLinks(doc)
+        val direct = docs.flatMap { (pageUrl, pageDoc) -> directPageAssets(pageDoc, pageUrl) }
+            .distinctBy { normalizedUrl(it.url) }
+        if (direct.isNotEmpty()) {
+            return meta to mediaRefs(source, gallery.stableId, direct)
+        }
+
+        // Keep provider archives strictly as fallback for posts that do not expose browsable media.
+        val candidates = providerLinks(first)
         val chosen = candidates.sortedBy { providerPriority(it.second) }.firstOrNull()
-            ?: throw AdapterException("CosplayTele post exposed no supported MediaFire/SoraFolder/Gofile/Telegram download link.")
+            ?: throw AdapterException("CosplayTele post exposed neither direct media nor a supported archive mirror.")
         val provider = chosen.second
-        val password = extractPassword(doc)
-        val media = MediaRef(
-            source = source,
-            stableId = shaText("archive:" + chosen.first).take(24),
-            galleryStableId = gallery.stableId,
-            index = 0,
-            url = chosen.first,
-            normalizedUrl = normalizedUrl(chosen.first),
-            referer = gallery.canonicalUrl,
-            mimeHint = "application/zip",
-            kind = MediaKind.ARCHIVE,
-            provider = provider,
-            archivePassword = password
+        val password = extractPassword(first)
+        return meta to listOf(
+            MediaRef(
+                source = source,
+                stableId = shaText("archive:" + chosen.first).take(24),
+                galleryStableId = gallery.stableId,
+                index = 0,
+                url = chosen.first,
+                normalizedUrl = normalizedUrl(chosen.first),
+                referer = gallery.canonicalUrl,
+                mimeHint = "application/zip",
+                kind = MediaKind.ARCHIVE,
+                provider = provider,
+                archivePassword = password
+            )
         )
-        return meta to listOf(media)
+    }
+
+    private fun postPages(first: Document, baseUrl: String): List<String> {
+        val base = URI(baseUrl)
+        val basePath = base.path.trimEnd('/')
+        return first.select("a[href]").mapNotNull { a ->
+            val href = absoluteUrl(a, "href")
+            val uri = runCatching { URI(href) }.getOrNull() ?: return@mapNotNull null
+            if (uri.host?.lowercase(Locale.ROOT) !in setOf("cosplaytele.com", "www.cosplaytele.com")) return@mapNotNull null
+            val path = uri.path.trimEnd('/')
+            val suffix = if (path.startsWith(basePath + "/")) path.removePrefix(basePath + "/") else ""
+            val page = suffix.toIntOrNull()
+                ?: if (path == basePath) {
+                    Regex("(?:^|&)(?:page|paged)=(\\d+)").find(uri.query.orEmpty())
+                        ?.groupValues?.get(1)?.toIntOrNull()
+                } else null
+            if (page == null || page <= 1) null else page to href
+        }.distinctBy { it.second }
+            .sortedBy { it.first }
+            .map { it.second }
     }
 
     private fun nextListing(doc: Document, visited: Set<String>): String? {
