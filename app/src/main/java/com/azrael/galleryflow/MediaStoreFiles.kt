@@ -186,7 +186,7 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
     }
 
     private fun relativePath(entity: EntityRecord, gallery: GalleryMeta): String =
-        Environment.DIRECTORY_DOWNLOADS + "/GalleryFlow/" +
+        Environment.DIRECTORY_DOWNLOADS + "/Cosplay/GalleryFlow/" +
             safe(entity.source.wireName) + "/" +
             safe(entity.displayName.ifBlank { entity.entityId }) + "/" +
             safe(gallery.stableId + " - " + gallery.title)
