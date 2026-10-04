@@ -133,14 +133,29 @@ class SyncEngine(private val context: Context) {
                             db.setEntityError(entity.source, entity.entityId, null)
                         }
                         ProcessResult.PROVIDER_REQUIRED -> {
-                            blocked = true
-                            db.setEntityError(
-                                entity.source,
-                                entity.entityId,
-                                "Provider download could not be resolved automatically at " + gallery.title
-                            )
-                            progress("Provider blocked • moving to next source • " + entity.displayName)
-                            break
+                            val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
+                            if (filesAfter > filesBefore) {
+                                // A supplemental provider (typically CosplayTele video archive)
+                                // failed after the directly exposed media were already saved.
+                                // Keep the gallery partial for a later retry, but do not block
+                                // the rest of the source.
+                                consecutiveFailures = 0
+                                db.setEntityError(
+                                    entity.source,
+                                    entity.entityId,
+                                    "Some provider-only media remain pending at " + gallery.title
+                                )
+                                progress("Direct files saved; provider-only media pending • continuing")
+                            } else {
+                                blocked = true
+                                db.setEntityError(
+                                    entity.source,
+                                    entity.entityId,
+                                    "Provider download could not be resolved automatically at " + gallery.title
+                                )
+                                progress("Provider blocked • moving to next source • " + entity.displayName)
+                                break
+                            }
                         }
                         ProcessResult.PARTIAL -> {
                             val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
