@@ -350,7 +350,7 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                 if (host != "cosplaytele.com" && host != "www.cosplaytele.com") continue
                 val slug = uri.path.trim('/')
                 if (slug.isBlank() || '/' in slug || slug in NON_POST_SLUGS) continue
-                if (!text.contains(Regex("(?i)(photos?|videos?|gifs?|cosplay|vol\\.|part)"))) continue
+                if (!Regex("(?i)(photos?|videos?|gifs?|cosplay|vol\\.|part)").containsMatchIn(text)) continue
                 if (!seen.add(slug)) continue
                 yield(GalleryRef(source, slug, entity.stableId, "https://cosplaytele.com/$slug/", text.ifBlank { slug }))
             }
