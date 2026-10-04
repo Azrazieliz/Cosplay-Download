@@ -227,7 +227,7 @@ class TeraBoxResolver(private val http: HttpClient) {
         .replace("\\u002F", "/")
         .replace("\\u002f", "/")
         .replace("\\/", "/")
-        .replace("&quot;", """)
+        .replace("&quot;", "\"")
 
     private data class RemoteFile(
         val name: String,
