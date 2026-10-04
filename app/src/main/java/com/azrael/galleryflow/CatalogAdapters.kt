@@ -466,7 +466,7 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
 class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
     override val source = SourceId.COSPLAYTELE
     override val enabled = true
-    override val statusLabel = "Enabled • direct images/videos • archive fallback"
+    override val statusLabel = "Direct images • embedded video when available"
 
     override fun defaultEntities(): List<SourceEntity> = listOf(
         SourceEntity(source, "site:all", "CosplayTele — entire site", "https://cosplaytele.com/", "site")
@@ -544,31 +544,11 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
         val password = extractPassword(first)
 
         if (direct.isNotEmpty()) {
-            val refs = mediaRefs(source, gallery.stableId, direct).toMutableList()
-            val advertisedVideos = advertisedVideoCount(title + " " + first.body().text())
-            val directVideos = direct.count { it.kind == MediaKind.VIDEO }
-
-            // CosplayTele commonly exposes the photos in the post while the videos
-            // exist only in the downloadable archive. When the title advertises more
-            // videos than are directly embedded, add one archive supplement and
-            // extract only its video entries to avoid duplicating the direct photos.
-            if (advertisedVideos > directVideos && chosen != null) {
-                refs += MediaRef(
-                    source = source,
-                    stableId = shaText("video-archive:" + chosen.first).take(24),
-                    galleryStableId = gallery.stableId,
-                    index = refs.size,
-                    url = chosen.first,
-                    normalizedUrl = normalizedUrl(chosen.first),
-                    referer = gallery.canonicalUrl,
-                    mimeHint = null,
-                    kind = MediaKind.ARCHIVE,
-                    provider = chosen.second,
-                    archivePassword = password,
-                    archiveVideosOnly = true
-                )
-            }
-            return meta to refs
+            // Direct site media is authoritative for normal CosplayTele sync.
+            // Some posts advertise videos that only exist behind third-party archive
+            // providers; those are intentionally best-effort and no longer make an
+            // otherwise complete image gallery partial.
+            return meta to mediaRefs(source, gallery.stableId, direct)
         }
 
         // If nothing is browsable directly, fall back to the complete provider archive.
