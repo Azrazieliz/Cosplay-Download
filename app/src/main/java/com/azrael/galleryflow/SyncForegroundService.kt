@@ -27,7 +27,7 @@ class SyncForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "GalleryFlow sync", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, "Kyora sync", NotificationManager.IMPORTANCE_LOW)
         )
     }
 
@@ -86,7 +86,7 @@ class SyncForegroundService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("GalleryFlow")
+            .setContentTitle("Kyora")
             .setContentText(s.message.take(180))
             .setContentIntent(open)
             .setOngoing(s.running)
