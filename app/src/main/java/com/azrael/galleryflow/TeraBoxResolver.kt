@@ -91,14 +91,16 @@ class TeraBoxResolver(private val http: HttpClient) {
 
         var lastError: String? = null
         for (base in hosts) {
-            val response = runCatching {
+            val response = try {
                 http.textResponse("$base/share/list?$query", sharePage, "application/json,text/plain,*/*")
-            }.getOrElse {
-                lastError = it.message
+            } catch (t: Throwable) {
+                lastError = t.message
                 continue
             }
 
-            val json = runCatching { JSONObject(response.body) }.getOrElse {
+            val json = try {
+                JSONObject(response.body)
+            } catch (_: Throwable) {
                 lastError = "Invalid TeraBox share-list response"
                 continue
             }
