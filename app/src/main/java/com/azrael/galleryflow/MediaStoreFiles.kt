@@ -99,7 +99,16 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         preferredReferer: String?
     ): HttpClient.OpenResponse {
         val referers = linkedSetOf<String?>()
+        val host = runCatching { URI(resolved).host?.lowercase().orEmpty() }.getOrDefault("")
+
+        // Kiutaku currently serves its actual image files from mitaku.net. The working
+        // browser/userscript path uses mitaku.net itself as the Referer, not kiutaku.com.
+        if (host == "mitaku.net" || host.endsWith(".mitaku.net")) {
+            referers += "https://mitaku.net/"
+        }
+
         referers += preferredReferer
+
         if (media.kind == MediaKind.IMAGE || media.kind == MediaKind.VIDEO) {
             val root = runCatching {
                 val uri = URI(resolved)
@@ -115,10 +124,14 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                 return http.open(resolved, referer)
             } catch (e: HttpStatusException) {
                 last = e
-                if (e.code !in listOf(401, 403)) throw e
+                // Some image CDNs intentionally return 404/406/410 for a rejected
+                // hotlink Referer, so try the remaining browser-compatible Referers.
+                // 429 is the only response where immediately trying again is harmful.
+                if (e.code == 429) throw e
             } catch (t: Throwable) {
                 last = t
-                break
+                // Network/TLS failures can be host-path specific; try the next referer
+                // before giving up.
             }
         }
         throw last ?: AdapterException("Could not open media URL.")
