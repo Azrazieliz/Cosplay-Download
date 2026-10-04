@@ -122,7 +122,7 @@ class MainActivity : Activity() {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         })
         brandRow.addView(brandText, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        brandRow.addView(label("v" + BuildConfig.VERSION_NAME, 11f, MUTED).apply {
+        brandRow.addView(label("v" + appVersion(), 11f, MUTED).apply {
             background = pill(SURFACE_2, 255)
             setPadding(dp(9), dp(5), dp(9), dp(5))
         })
@@ -545,6 +545,10 @@ class MainActivity : Activity() {
             Color.rgb(55, 61, 73)
         )
     )
+
+    private fun appVersion(): String = runCatching {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "0.6"
+    }.getOrDefault("0.6")
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
