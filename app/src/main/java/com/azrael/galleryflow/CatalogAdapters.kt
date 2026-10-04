@@ -545,7 +545,7 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
 
         if (direct.isNotEmpty()) {
             val refs = mediaRefs(source, gallery.stableId, direct).toMutableList()
-            val advertisedVideos = advertisedVideoCount(title)
+            val advertisedVideos = advertisedVideoCount(title + " " + first.body().text())
             val directVideos = direct.count { it.kind == MediaKind.VIDEO }
 
             // CosplayTele commonly exposes the photos in the post while the videos
