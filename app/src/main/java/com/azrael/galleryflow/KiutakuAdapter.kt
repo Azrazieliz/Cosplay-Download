@@ -142,18 +142,19 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
         val scoped = doc.select(".article-fulltext img")
         val elements = if (scoped.isNotEmpty()) scoped else doc.select("article img,main img")
 
-        for (img in elements) {
-            val raw = bestImageAttribute(img) ?: continue
-            val candidate = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
-            if (isGalleryImage(img, candidate)) out += candidate
-        }
-
         // Some mirrors wrap the displayed image in a link to the original.
+        // Add these first so the original keeps the gallery's natural order.
         for (img in elements) {
             val anchor = img.parents().firstOrNull { it.tagName() == "a" && it.hasAttr("href") } ?: continue
             val href = absolute(anchor, "href")
             val path = runCatching { URI(href).path.lowercase(Locale.ROOT) }.getOrDefault("")
             if (IMAGE_EXTENSIONS.any { path.endsWith(it) }) out += href
+        }
+
+        for (img in elements) {
+            val raw = bestImageAttribute(img) ?: continue
+            val candidate = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
+            if (isGalleryImage(img, candidate)) out += candidate
         }
 
         return out.toList()
