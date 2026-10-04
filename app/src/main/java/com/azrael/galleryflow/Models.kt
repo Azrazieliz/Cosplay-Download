@@ -65,7 +65,8 @@ data class MediaRef(
     val mimeHint: String? = null,
     val kind: MediaKind = MediaKind.IMAGE,
     val provider: String? = null,
-    val archivePassword: String? = null
+    val archivePassword: String? = null,
+    val archiveVideosOnly: Boolean = false
 )
 
 data class EntityRecord(
