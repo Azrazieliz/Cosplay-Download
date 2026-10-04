@@ -9,6 +9,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import net.lingala.zip4j.ZipFile
 import java.io.File
+import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -30,10 +31,16 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
             "mediafire", "sorafolder", "gofile" -> media.url
             else -> media.referer
         }
-        http.open(resolved, resolvedReferer).use { response ->
+        openWithFallback(media, resolved, resolvedReferer).use { response ->
             val responseMime = response.contentType?.lowercase()
             if (media.kind == MediaKind.ARCHIVE && responseMime?.startsWith("text/html") == true) {
                 throw InteractiveProviderRequiredException(media.provider ?: "Archive provider", response.finalUrl)
+            }
+            if (media.kind == MediaKind.IMAGE && responseMime?.startsWith("text/") == true) {
+                throw AdapterException("Image URL returned HTML/text instead of an image.")
+            }
+            if (media.kind == MediaKind.VIDEO && responseMime?.startsWith("text/") == true) {
+                throw AdapterException("Video URL returned HTML/text instead of a video.")
             }
 
             val dispositionName = filenameFromDisposition(response.contentDisposition)
@@ -80,6 +87,37 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                 throw t
             }
         }
+    }
+
+    private fun openWithFallback(
+        media: MediaRef,
+        resolved: String,
+        preferredReferer: String?
+    ): HttpClient.OpenResponse {
+        val referers = linkedSetOf<String?>()
+        referers += preferredReferer
+        if (media.kind == MediaKind.IMAGE || media.kind == MediaKind.VIDEO) {
+            val root = runCatching {
+                val uri = URI(resolved)
+                uri.scheme + "://" + uri.host + "/"
+            }.getOrNull()
+            referers += root
+            referers += null
+        }
+
+        var last: Throwable? = null
+        for (referer in referers) {
+            try {
+                return http.open(resolved, referer)
+            } catch (e: HttpStatusException) {
+                last = e
+                if (e.code !in listOf(401, 403)) throw e
+            } catch (t: Throwable) {
+                last = t
+                break
+            }
+        }
+        throw last ?: AdapterException("Could not open media URL.")
     }
 
     fun delete(contentUri: String?) {
