@@ -82,15 +82,19 @@ class LiveSiteSmokeTest {
                 val scripts = providerDoc.select("script").mapNotNull { script ->
                     val src = script.attr("src").takeIf { it.isNotBlank() }
                     val body = script.data()
-                    val marker = listOf("function startDownload", "startDownload =", "startDownload()", "fetch(", "$.ajax")
-                        .firstOrNull { body.contains(it, true) }
                     when {
                         src != null -> "src=" + src
-                        marker != null -> {
-                            val index = body.indexOf(marker, ignoreCase = true).coerceAtLeast(0)
-                            val from = (index - 400).coerceAtLeast(0)
-                            "inline=" + body.substring(from, (index + 5000).coerceAtMost(body.length))
-                                .replace("\n", " ")
+                        body.contains("function startDownload", true) -> {
+                            fun around(marker: String, before: Int = 500, after: Int = 6500): String {
+                                val index = body.indexOf(marker, ignoreCase = true)
+                                if (index < 0) return ""
+                                val from = (index - before).coerceAtLeast(0)
+                                val to = (index + after).coerceAtMost(body.length)
+                                return body.substring(from, to).replace("\n", " ")
+                            }
+                            "key=" + around("keyEncrypte", 1200, 2200) +
+                                " START=" + around("function startDownload", 400, 4200) +
+                                " CHECK=" + around("function checkFileInDB", 300, 6500)
                         }
                         else -> null
                     }
