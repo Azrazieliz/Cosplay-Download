@@ -35,5 +35,6 @@ kotlin {
 dependencies {
     implementation("org.jsoup:jsoup:1.18.1")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
+    implementation("com.github.junrar:junrar:8.1.1")
     testImplementation("junit:junit:4.13.2")
 }
