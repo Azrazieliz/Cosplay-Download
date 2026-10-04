@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 6) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 7) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -150,6 +150,57 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
                          AND m.gallery_id=galleries.gallery_id
                          AND m.state='complete'
                          AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source='cosplaytele'
+                     AND lower(title) LIKE '%video%'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.mime_type LIKE 'video/%'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('kiutaku','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 7) {
+            // 0.5.2 changes the actual Kiutaku download request/referer path and
+            // adds direct embedded/HLS video extraction for CosplayTele.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='kiutaku'
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source='kiutaku'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='cosplaytele'
+                     AND state!='complete'
+                     AND (
+                       mime_type LIKE 'video/%'
+                       OR url LIKE '%cossora%'
+                       OR url LIKE '%mediafire%'
+                       OR url LIKE '%sorafolder%'
+                       OR url LIKE '%gofile%'
                      )"""
             )
             db.execSQL(
