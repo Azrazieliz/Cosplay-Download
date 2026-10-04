@@ -179,8 +179,14 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     private fun isGalleryImage(img: Element, url: String): Boolean {
         if (!url.startsWith("http://") && !url.startsWith("https://")) return false
         val lower = url.lowercase(Locale.ROOT)
-        if (listOf("logo","icon","avatar","emoji","ads","banner","favicon","pixel").any { it in lower }) return false
         val path = runCatching { URI(url).path.lowercase(Locale.ROOT) }.getOrDefault(lower)
+        val fileName = path.substringAfterLast('/')
+        if (
+            "/ads/" in path || "/advert" in path || "/banner" in path ||
+            fileName.startsWith("logo") || fileName.startsWith("icon") ||
+            fileName.startsWith("avatar") || fileName.startsWith("favicon") ||
+            fileName.startsWith("pixel") || fileName.startsWith("emoji")
+        ) return false
         val imageLike = IMAGE_EXTENSIONS.any { path.endsWith(it) } ||
             img.attr("alt").contains("photo", ignoreCase = true) ||
             img.classNames().any { it.contains("image", ignoreCase = true) }
