@@ -33,13 +33,21 @@ class ProviderWebActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
             text = "Provider session"
         }
+
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
             settings.userAgentString = HttpClient.USER_AGENT
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    status.text = url ?: "Provider session"
+                    CookieManager.getInstance().flush()
+                    status.text = when {
+                        url.isNullOrBlank() -> "Provider session"
+                        url.contains("/wap/outlogin", ignoreCase = true) -> "TeraBox sign-in"
+                        url.contains("terabox.com", ignoreCase = true) -> "TeraBox web session active"
+                        else -> "Provider page"
+                    }
                 }
             }
             webChromeClient = WebChromeClient()
@@ -60,7 +68,7 @@ class ProviderWebActivity : Activity() {
         setContentView(root)
 
         val url = intent.getStringExtra(EXTRA_URL)?.takeIf { it.startsWith("http") }
-            ?: "https://www.terabox.com/"
+            ?: TERABOX_LOGIN_URL
         webView.loadUrl(url)
     }
 
@@ -69,6 +77,7 @@ class ProviderWebActivity : Activity() {
     }
 
     override fun onDestroy() {
+        CookieManager.getInstance().flush()
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.destroy()
@@ -89,13 +98,17 @@ class ProviderWebActivity : Activity() {
                 }
                 setDestinationInExternalPublicDir(
                     Environment.DIRECTORY_DOWNLOADS,
-                    "GalleryFlow/provider_downloads/" + safeFileName(filename)
+                    "Cosplay/GalleryFlow/provider_downloads/" + safeFileName(filename)
                 )
             }
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             manager.enqueue(request)
         }.onSuccess {
-            Toast.makeText(this, "Provider download queued in Downloads/GalleryFlow/provider_downloads", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Provider download queued in Downloads/Cosplay/GalleryFlow/provider_downloads",
+                Toast.LENGTH_LONG
+            ).show()
         }.onFailure {
             Toast.makeText(this, it.message ?: "Could not queue provider download", Toast.LENGTH_LONG).show()
         }
@@ -110,5 +123,6 @@ class ProviderWebActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "url"
+        const val TERABOX_LOGIN_URL = "https://www.terabox.com/wap/outlogin"
     }
 }
