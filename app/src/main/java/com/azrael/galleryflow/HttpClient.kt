@@ -337,7 +337,7 @@ class HttpClient {
 
     companion object {
         const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36 GalleryFlow/0.3.0"
+            "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36 Kyora/0.6.0"
         private val URL_REGEX = Regex("https?://[^\\s\"'<>]+", RegexOption.IGNORE_CASE)
     }
 }
