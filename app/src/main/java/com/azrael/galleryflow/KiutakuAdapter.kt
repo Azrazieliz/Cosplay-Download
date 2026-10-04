@@ -117,6 +117,12 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             for (candidate in imageCandidates(doc)) {
                 val normalized = normalizeMediaUrl(candidate)
                 if (normalized in media) continue
+                val mediaHost = runCatching { URI(candidate).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+                val mediaReferer = if (mediaHost == "mitaku.net" || mediaHost.endsWith(".mitaku.net")) {
+                    "https://mitaku.net/"
+                } else {
+                    pageUrl
+                }
                 media[normalized] = MediaRef(
                     source = source,
                     stableId = sha256Text(normalized).take(24),
@@ -124,7 +130,7 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
                     index = index++,
                     url = candidate,
                     normalizedUrl = normalized,
-                    referer = pageUrl,
+                    referer = mediaReferer,
                     mimeHint = mimeFromPath(candidate),
                     kind = MediaKind.IMAGE
                 )
