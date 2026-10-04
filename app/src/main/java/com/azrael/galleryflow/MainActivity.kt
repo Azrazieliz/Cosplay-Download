@@ -144,7 +144,7 @@ class MainActivity : Activity() {
         sourceList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(sourceList)
 
-        root.addView(label("TERABOX / ARCHIVE PROVIDER", 12f, MUTED).apply {
+        root.addView(label("ARCHIVE PROVIDERS", 12f, MUTED).apply {
             setPadding(0, dp(12), 0, dp(4))
         })
         providerStatus = label("No provider action required", 12f, MUTED)
@@ -152,11 +152,14 @@ class MainActivity : Activity() {
 
         val providerRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         providerRow.addView(Button(this).apply {
-            text = "Connect TeraBox"
-            setOnClickListener { openProvider(ProviderWebActivity.TERABOX_LOGIN_URL) }
+            text = "Retry Provider"
+            setOnClickListener {
+                GalleryDb(this@MainActivity).use { it.retryProviderFailures() }
+                startSync(SyncMode.BACKFILL)
+            }
         }, LinearLayout.LayoutParams(0, dp(46), 1f))
         providerRow.addView(Button(this).apply {
-            text = "Open Blocked Item"
+            text = "Open Blocked"
             setOnClickListener {
                 val pending = GalleryDb(this@MainActivity).use { it.firstProviderBlockedMedia() }
                 if (pending == null) {
@@ -174,7 +177,7 @@ class MainActivity : Activity() {
         )
         root.addView(
             label(
-                "TeraBox opens inside GalleryFlow; Google authentication opens in your normal browser, then GalleryFlow resumes the TeraBox session. Files are stored under Downloads/Cosplay/GalleryFlow.",
+                "Public TeraBox shares are resolved automatically. Provider interaction is only used when a mirror truly cannot be resolved. Files are stored under Downloads/Cosplay/GalleryFlow.",
                 11f,
                 MUTED
             ).apply { setPadding(0, dp(4), 0, 0) }
