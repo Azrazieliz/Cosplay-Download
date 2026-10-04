@@ -154,6 +154,7 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                 val ext = entryName.substringAfterLast('.', "").lowercase()
                 val mime = mimeForExtension(ext) ?: continue
                 val kind = if (mime.startsWith("video/")) MediaKind.VIDEO else MediaKind.IMAGE
+                if (archive.archiveVideosOnly && kind != MediaKind.VIDEO) continue
                 val base = safeFileName(entryName.substringAfterLast('/').ifBlank { "file.$ext" })
                 val filename = "%04d_%04d_%s".format(archive.index + 1, extractedIndex + 1, base)
                 val uri = createRow(filename, mime, relativePath(entity, gallery))
@@ -198,7 +199,10 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                 out += ExtractedDownload(media, result)
                 extractedIndex++
             }
-            if (out.isEmpty()) throw AdapterException("ZIP contained no supported image/video files.")
+            if (out.isEmpty()) {
+                val expected = if (archive.archiveVideosOnly) "video files" else "supported image/video files"
+                throw AdapterException("ZIP contained no $expected.")
+            }
             return out
         } catch (t: Throwable) {
             createdUris.forEach { runCatching { context.contentResolver.delete(it, null, null) } }
