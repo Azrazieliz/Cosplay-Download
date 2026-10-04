@@ -6,7 +6,15 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 1) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 2) {
+    data class SourceStats(
+        val galleries: Int,
+        val complete: Int,
+        val partial: Int,
+        val inaccessible: Int,
+        val mediaComplete: Int
+    )
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE entities(
             source TEXT NOT NULL,
@@ -72,7 +80,40 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         db.execSQL("CREATE INDEX idx_media_gallery ON media(source, gallery_id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE content_uri IS NULL
+                     AND state='inaccessible'
+                     AND (
+                       url LIKE '%terabox%'
+                       OR url LIKE '%m.4khd.com%'
+                       OR url LIKE '%mediafire.com%'
+                       OR url LIKE '%sorafolder.com%'
+                       OR url LIKE '%gofile.io%'
+                       OR url LIKE '%t.me%'
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')
+                     AND state IN ('partial','inaccessible','retrying')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                     )"""
+            )
+            db.execSQL("DELETE FROM entities WHERE kind!='site'")
+        }
+    }
+
+    fun ensureEntities(entities: List<SourceEntity>) {
+        entities.forEach(::addEntity)
+    }
 
     fun addEntity(entity: SourceEntity) {
         val values = ContentValues().apply {
@@ -102,7 +143,7 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         readableDatabase.query(
             "entities",
             arrayOf("source","entity_id","display_name","canonical_url","kind","selected","live_enabled","live_cursor","last_sync_at","last_error"),
-            null,null,null,null,"display_name COLLATE NOCASE ASC"
+            null,null,null,null,"source ASC, display_name COLLATE NOCASE ASC"
         ).use { c ->
             while (c.moveToNext()) {
                 out += EntityRecord(
@@ -121,6 +162,35 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         }
         return out
     }
+
+    fun sourceStats(source: SourceId): SourceStats {
+        fun count(sql: String, args: Array<String>): Int =
+            readableDatabase.rawQuery(sql, args).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+        val src = source.wireName
+        return SourceStats(
+            galleries = count("SELECT COUNT(*) FROM galleries WHERE source=?", arrayOf(src)),
+            complete = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state=?", arrayOf(src, TransferState.COMPLETE.dbValue)),
+            partial = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state IN (?,?)", arrayOf(src, TransferState.PARTIAL.dbValue, TransferState.RETRYING.dbValue)),
+            inaccessible = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state=?", arrayOf(src, TransferState.INACCESSIBLE.dbValue)),
+            mediaComplete = count("SELECT COUNT(*) FROM media WHERE source=? AND state=?", arrayOf(src, TransferState.COMPLETE.dbValue))
+        )
+    }
+
+    fun firstProviderBlockedMedia(): MediaRecord? =
+        queryMedia(
+            """state=? AND (
+                url LIKE '%terabox%'
+                OR url LIKE '%m.4khd.com%'
+                OR url LIKE '%mediafire.com%'
+                OR url LIKE '%sorafolder.com%'
+                OR url LIKE '%gofile.io%'
+                OR url LIKE '%t.me%'
+            )""".trimIndent(),
+            arrayOf(TransferState.INACCESSIBLE.dbValue),
+            "1",
+            "updated_at ASC"
+        ).firstOrNull()
 
     fun setSelected(source: SourceId, entityId: String, value: Boolean) =
         setEntityBoolean(source, entityId, "selected", value)
