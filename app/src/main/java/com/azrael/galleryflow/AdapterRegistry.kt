@@ -7,13 +7,15 @@ object AdapterRegistry {
     val adapters: List<SourceAdapter> = listOf(
         BuonDuaAdapter(http),
         KiutakuAdapter(http),
+        FourKGirlAdapter(http),
+        EveriaAdapter(http),
         FourKhdAdapter(http),
         CosplayTeleAdapter(http)
     )
 
     fun forUrl(url: String): SourceAdapter =
         adapters.firstOrNull { it.matches(url) }
-            ?: throw AdapterException("No GalleryFlow adapter recognizes this URL.")
+            ?: throw AdapterException("No Kyora adapter recognizes this URL.")
 
     fun forSource(source: SourceId): SourceAdapter =
         adapters.first { it.source == source }
