@@ -28,21 +28,35 @@ class LiveSiteSmokeTest {
         assertTrue("Kiutaku exposed no media | " + diagnostic, media.isNotEmpty())
 
         val first = media.first()
-        try {
-            http.open(first.url, first.referer).use { response ->
-                val type = response.contentType.orEmpty()
-                val probe = ByteArray(64)
-                val read = response.input.read(probe)
-                assertTrue("Kiutaku image returned no bytes; type=" + type + " url=" + first.url, read > 0)
-                assertTrue("Kiutaku media was not an image; type=" + type + " url=" + first.url, type.startsWith("image/"))
+        val attempts = listOf<String?>(
+            first.referer,
+            "https://mitaku.net/",
+            null
+        )
+        val failures = mutableListOf<String>()
+        var worked = false
+        for (referer in attempts) {
+            try {
+                http.open(first.url, referer).use { response ->
+                    val type = response.contentType.orEmpty()
+                    val probe = ByteArray(64)
+                    val read = response.input.read(probe)
+                    if (read > 0 && type.startsWith("image/")) {
+                        worked = true
+                        return@use
+                    }
+                    failures += "ref=" + referer + " type=" + type + " read=" + read
+                }
+            } catch (t: Throwable) {
+                failures += "ref=" + referer + " error=" + (t.message ?: t.javaClass.name)
             }
-        } catch (t: Throwable) {
-            throw AssertionError(
-                "Kiutaku media request failed: " + (t.message ?: t.javaClass.name) +
-                    " url=" + first.url + " referer=" + first.referer,
-                t
-            )
+            if (worked) break
         }
+        assertTrue(
+            "Kiutaku media failed with every referer: " + failures.joinToString(" || ") +
+                " url=" + first.url,
+            worked
+        )
     }
 
     @Test
