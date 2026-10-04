@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 4) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 5) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -107,6 +107,31 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
                    )"""
             )
             db.execSQL("UPDATE entities SET last_error=NULL, live_cursor=NULL")
+        }
+        if (oldVersion < 5) {
+            // 0.5 changes 4KHD/CosplayTele from archive-first to direct-media-first.
+            // Retry every unfinished gallery with the new parser while preserving real completed files.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source IN ('4khd','cosplaytele')
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source IN ('4khd','cosplaytele')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('4khd','cosplaytele')"""
+            )
         }
     }
 
