@@ -240,7 +240,7 @@ class SyncEngine(private val context: Context) {
             db.setGalleryState(ref.source, ref.stableId, state, e.message)
             ProcessResult.PARTIAL
         } catch (t: Throwable) {
-            if (SyncControl.isStopping() || t is SyncCancelledException) return false
+            if (SyncControl.isStopping() || t is SyncCancelledException) return ProcessResult.PARTIAL
             stats.errors++
             db.setGalleryState(ref.source, ref.stableId, TransferState.RETRYING, t.message ?: t.javaClass.simpleName)
             ProcessResult.PARTIAL
