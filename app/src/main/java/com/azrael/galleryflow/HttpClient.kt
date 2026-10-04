@@ -254,7 +254,7 @@ class HttpClient {
     private fun isDirectFilePath(path: String): Boolean =
         listOf(
             ".zip", ".rar", ".7z",
-            ".mp4", ".webm", ".mov",
+            ".mp4", ".webm", ".mov", ".m3u8",
             ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"
         ).any { path.endsWith(it) }
 
