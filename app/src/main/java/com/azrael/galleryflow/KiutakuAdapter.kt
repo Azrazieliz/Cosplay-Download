@@ -73,7 +73,8 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
         while (!next.isNullOrBlank() && visitedPages.add(next)) {
             if (!SyncControl.checkpoint()) throw SyncCancelledException()
             val doc = http.document(next)
-            for (anchor in doc.select("a[href]")) {
+            val listingAnchors = doc.select(".items-row .item-thumb a[href]").ifEmpty { doc.select("a[href]") }
+            for (anchor in listingAnchors) {
                 val href = absolute(anchor, "href")
                 val match = GALLERY_PATH.matchEntire(runCatching { URI(href).path.trimEnd('/') }.getOrDefault(""))
                     ?: continue
@@ -136,27 +137,23 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     internal fun imageCandidates(doc: Document): List<String> {
         val out = linkedSetOf<String>()
 
-        // Kiutaku frequently wraps the real/original image in an anchor while the <img>
-        // itself is lazy-loaded or a thumbnail. Prefer those original image links.
-        for (anchor in doc.select("a[href]")) {
-            val href = absolute(anchor, "href")
-            val uri = runCatching { URI(href) }.getOrNull() ?: continue
-            val path = uri.path?.lowercase(Locale.ROOT).orEmpty()
-            val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
-            if ((host == "mitaku.net" || host.endsWith(".mitaku.net")) &&
-                IMAGE_EXTENSIONS.any { path.endsWith(it) }
-            ) {
-                out += href
-            }
-        }
+        // Current Kiutaku/Xiutaku/BuonDua-style gallery markup keeps the album
+        // media specifically inside .article-fulltext. Prefer that exact scope.
+        val scoped = doc.select(".article-fulltext img")
+        val elements = if (scoped.isNotEmpty()) scoped else doc.select("article img,main img")
 
-        val preferred = listOf("article img", ".entry-content img", ".post-content img", "main img")
-            .flatMap { doc.select(it) }.distinct()
-        val elements = if (preferred.isNotEmpty()) preferred else doc.select("img")
         for (img in elements) {
             val raw = bestImageAttribute(img) ?: continue
             val candidate = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
             if (isGalleryImage(img, candidate)) out += candidate
+        }
+
+        // Some mirrors wrap the displayed image in a link to the original.
+        for (img in elements) {
+            val anchor = img.parents().firstOrNull { it.tagName() == "a" && it.hasAttr("href") } ?: continue
+            val href = absolute(anchor, "href")
+            val path = runCatching { URI(href).path.lowercase(Locale.ROOT) }.getOrDefault("")
+            if (IMAGE_EXTENSIONS.any { path.endsWith(it) }) out += href
         }
 
         return out.toList()
@@ -197,9 +194,14 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             val href = absolute(it, "href")
             if (href !in visited) return href
         }
+
         val base = URI(entityUrl)
         val entityPath = base.path.trimEnd('/')
-        val candidates = doc.select("a[href]").mapNotNull { anchor ->
+        val currentPage = Regex("(?:^|&)(?:page|paged)=(\\d+)")
+            .find(runCatching { URI(doc.baseUri()).query.orEmpty() }.getOrDefault(""))
+            ?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+        val candidates = doc.select(".pagination-list a[href],a[href]").mapNotNull { anchor ->
             val href = absolute(anchor, "href")
             if (href in visited) return@mapNotNull null
             val uri = runCatching { URI(href) }.getOrNull() ?: return@mapNotNull null
@@ -209,7 +211,7 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             val page = Regex("(?:^|&)(?:page|paged)=(\\d+)").find(uri.query.orEmpty())
                 ?.groupValues?.get(1)?.toIntOrNull()
                 ?: anchor.text().trim().toIntOrNull()
-            if (page == null) null else page to href
+            if (page == null || page <= currentPage) null else page to href
         }
         return candidates.minByOrNull { it.first }?.second
     }
