@@ -81,10 +81,17 @@ class LiveSiteSmokeTest {
                     .joinToString(" || ") { it.outerHtml().replace("\n", " ").take(600) }
                 val scripts = providerDoc.select("script").mapNotNull { script ->
                     val src = script.attr("src").takeIf { it.isNotBlank() }
-                    val body = script.data().takeIf { it.contains("download", true) || it.contains("timer", true) || it.contains("countdown", true) }
+                    val body = script.data()
+                    val marker = listOf("function startDownload", "startDownload =", "startDownload()", "fetch(", "$.ajax")
+                        .firstOrNull { body.contains(it, true) }
                     when {
                         src != null -> "src=" + src
-                        body != null -> "inline=" + body.replace("\n", " ").take(1000)
+                        marker != null -> {
+                            val index = body.indexOf(marker, ignoreCase = true).coerceAtLeast(0)
+                            val from = (index - 400).coerceAtLeast(0)
+                            "inline=" + body.substring(from, (index + 5000).coerceAtMost(body.length))
+                                .replace("\n", " ")
+                        }
                         else -> null
                     }
                 }.take(12).joinToString(" || ")
