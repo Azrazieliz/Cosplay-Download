@@ -44,6 +44,7 @@ private fun videoMime(url: String): String? {
         p.endsWith(".mp4") || p.endsWith(".m4v") -> "video/mp4"
         p.endsWith(".webm") -> "video/webm"
         p.endsWith(".mov") -> "video/quicktime"
+        p.endsWith(".m3u8") -> "application/vnd.apple.mpegurl"
         else -> null
     }
 }
@@ -536,8 +537,10 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
             title, tags, published(first) ?: gallery.publishedAt, docs.keys.toList()
         )
 
-        val direct = docs.flatMap { (pageUrl, pageDoc) -> directPageAssets(pageDoc, pageUrl) }
-            .distinctBy { normalizedUrl(it.url) }
+        val direct = (
+            docs.flatMap { (pageUrl, pageDoc) -> directPageAssets(pageDoc, pageUrl) } +
+                docs.flatMap { (pageUrl, pageDoc) -> embeddedVideoAssets(pageDoc, pageUrl) }
+            ).distinctBy { normalizedUrl(it.url) }
 
         val candidates = providerLinks(first)
         val chosen = candidates.sortedBy { providerPriority(it.second) }.firstOrNull()
@@ -588,6 +591,56 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                 archivePassword = password
             )
         )
+    }
+
+    private fun embeddedVideoAssets(doc: Document, pageUrl: String): List<DirectPageAsset> {
+        val out = linkedMapOf<String, DirectPageAsset>()
+
+        fun add(raw: String, referer: String) {
+            val cleaned = raw
+                .replace("\\u002F", "/")
+                .replace("\\u002f", "/")
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+                .trim(' ', '\'', '"')
+            if (!cleaned.startsWith("http://") && !cleaned.startsWith("https://")) return
+            val mime = videoMime(cleaned) ?: return
+            val key = normalizedUrl(cleaned)
+            out.putIfAbsent(key, DirectPageAsset(cleaned, referer, MediaKind.VIDEO, mime))
+        }
+
+        for (iframe in doc.select("iframe[src]")) {
+            val iframeUrl = absoluteUrl(iframe, "src")
+            val host = runCatching { URI(iframeUrl).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+            if (!host.contains("cossora.stream") && !host.contains("cossora")) continue
+
+            val response = runCatching {
+                http.textResponse(
+                    iframeUrl,
+                    pageUrl,
+                    "text/html,application/xhtml+xml,*/*;q=0.8"
+                )
+            }.getOrNull() ?: continue
+
+            val body = response.body
+                .replace("\\u002F", "/")
+                .replace("\\u002f", "/")
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+
+            val patterns = listOf(
+                Regex("""https?://[^\s"'<>\\]+\.(?:mp4|m4v|webm|mov|m3u8)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE),
+                Regex("""["'](?:file|src|source|video|hls|playlist)["']\s*[:=]\s*["'](https?://[^"']+)""", RegexOption.IGNORE_CASE)
+            )
+
+            for (pattern in patterns) {
+                for (match in pattern.findAll(body)) {
+                    val candidate = if (match.groupValues.size > 1) match.groupValues[1] else match.value
+                    add(candidate, response.finalUrl)
+                }
+            }
+        }
+        return out.values.toList()
     }
 
     private fun postPages(first: Document, baseUrl: String): List<String> {
