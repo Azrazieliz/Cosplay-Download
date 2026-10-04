@@ -156,7 +156,7 @@ class FourKhdAdapter(private val http: HttpClient) : SourceAdapter {
 class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
     override val source = SourceId.BUONDUA
     override val enabled = true
-    override val statusLabel = "Enabled • whole-site • direct CDN with TeraBox preference"
+    override val statusLabel = "Enabled • whole-site • direct album images"
 
     override fun defaultEntities(): List<SourceEntity> = listOf(
         SourceEntity(source, "site:all", "BuonDua — entire site", "https://buondua.net/albums", "site")
@@ -225,25 +225,6 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
             titleOf(first, gallery.title), tags, published(first) ?: gallery.publishedAt, docs.keys.toList()
         )
 
-        val external = docs.values.flatMap { pageDoc ->
-            pageDoc.select("a[href]").mapNotNull { a ->
-                val href = absoluteUrl(a, "href")
-                val host = runCatching { URI(href).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
-                if ("terabox" in host || a.text().contains("terabox", true)) href else null
-            }
-        }.distinct()
-
-        if (external.isNotEmpty()) {
-            val chosen = external.first()
-            return meta to listOf(
-                MediaRef(
-                    source, shaText("archive:$chosen").take(24), gallery.stableId, 0,
-                    chosen, normalizedUrl(chosen), gallery.canonicalUrl, "application/zip",
-                    MediaKind.ARCHIVE, "TeraBox", null
-                )
-            )
-        }
-
         val prefix = "/photos/" + gallery.stableId + "/"
         val media = linkedMapOf<String, MediaRef>()
         var index = 0
@@ -264,7 +245,7 @@ class BuonDuaAdapter(private val http: HttpClient) : SourceAdapter {
                 )
             }
         }
-        if (media.isEmpty()) throw AdapterException("BuonDua album exposed neither a TeraBox archive nor gallery CDN media.")
+        if (media.isEmpty()) throw AdapterException("BuonDua album exposed no gallery CDN images.")
         return meta to media.values.toList()
     }
 
