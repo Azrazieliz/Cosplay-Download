@@ -3,6 +3,8 @@ package com.azrael.galleryflow
 import android.content.Context
 
 class SyncEngine(private val context: Context) {
+    private enum class ProcessResult { COMPLETE, PARTIAL, PROVIDER_REQUIRED }
+
     data class Stats(
         var entities: Int = 0,
         var galleriesSeen: Int = 0,
@@ -79,10 +81,14 @@ class SyncEngine(private val context: Context) {
 
                 for (gallery in newOnes.asReversed()) {
                     if (!SyncControl.checkpoint()) return
-                    if (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
-                        db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
-                    } else {
-                        break
+                    when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
+                        ProcessResult.COMPLETE ->
+                            db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
+                        ProcessResult.PROVIDER_REQUIRED -> {
+                            db.setEntityError(entity.source, entity.entityId, "Provider session required before Live Sync can continue.")
+                            break
+                        }
+                        ProcessResult.PARTIAL -> break
                     }
                 }
                 db.setEntityError(entity.source, entity.entityId, null)
@@ -116,7 +122,12 @@ class SyncEngine(private val context: Context) {
             try {
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
-                    processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
+                    val result = processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
+                    if (result == ProcessResult.PROVIDER_REQUIRED) {
+                        db.setEntityError(entity.source, entity.entityId, "Provider session required. Backfill paused at this gallery.")
+                        progress("Backfill paused • provider session required • " + entity.displayName)
+                        break
+                    }
                     if (serviceQueuedLive(db, files, flow, stats, progress)) {
                         SyncControl.setMode(SyncMode.BACKFILL)
                         SyncControl.updateMessage(prefix)
@@ -155,15 +166,16 @@ class SyncEngine(private val context: Context) {
         flow: FlowLinkEmitter,
         stats: Stats,
         progress: (String) -> Unit
-    ): Boolean {
+    ): ProcessResult {
         stats.galleriesSeen++
         db.upsertGallery(ref, TransferState.PENDING)
         return try {
             val (meta, mediaItems) = adapter.fetchGallery(ref)
             db.updateGalleryMeta(meta, mediaItems.size)
             var allComplete = true
+            var providerRequired = false
             for ((position, media) in mediaItems.withIndex()) {
-                if (!SyncControl.checkpoint()) return false
+                if (!SyncControl.checkpoint()) return ProcessResult.PARTIAL
                 db.upsertMedia(entity.entityId, media)
                 val existing = db.media(media.source, media.stableId)
                 if (existing != null && existing.state == TransferState.COMPLETE && files.exists(existing.contentUri)) continue
@@ -182,8 +194,11 @@ class SyncEngine(private val context: Context) {
                     }
                 } catch (e: InteractiveProviderRequiredException) {
                     allComplete = false
+                    providerRequired = true
                     db.setMediaState(media.source, media.stableId, TransferState.INACCESSIBLE)
+                    db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL, e.provider + " session required")
                     progress("Provider session required • " + e.provider + " • " + meta.title)
+                    break
                 } catch (e: HttpStatusException) {
                     allComplete = false
                     val state = when (e.code) {
@@ -210,21 +225,21 @@ class SyncEngine(private val context: Context) {
                 stats.galleriesCompleted++
                 flow.galleryDownloaded(entity, meta)
                 progress("Complete • " + meta.title)
-                true
+                ProcessResult.COMPLETE
             } else {
                 db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL)
-                false
+                if (providerRequired) ProcessResult.PROVIDER_REQUIRED else ProcessResult.PARTIAL
             }
         } catch (e: HttpStatusException) {
             stats.errors++
             val state = if (e.code in listOf(401,403,404,410)) TransferState.INACCESSIBLE else TransferState.RETRYING
             db.setGalleryState(ref.source, ref.stableId, state, e.message)
-            false
+            ProcessResult.PARTIAL
         } catch (t: Throwable) {
             if (SyncControl.isStopping() || t is SyncCancelledException) return false
             stats.errors++
             db.setGalleryState(ref.source, ref.stableId, TransferState.RETRYING, t.message ?: t.javaClass.simpleName)
-            false
+            ProcessResult.PARTIAL
         }
     }
 
