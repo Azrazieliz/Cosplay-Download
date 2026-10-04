@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 2) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 3) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -108,6 +108,28 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
                      )"""
             )
             db.execSQL("DELETE FROM entities WHERE kind!='site'")
+        }
+        if (oldVersion < 3) {
+            // v0.2.x could create hundreds of provider-blocked rows without files.
+            // Keep real completed files, but force unresolved provider items through
+            // the new native public-share/mirror resolvers.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE content_uri IS NULL
+                     AND state IN ('inaccessible','retrying','partial','downloading')
+                     AND source IN ('4khd','buondua','cosplaytele')"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')
+                     AND state!='complete'"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')"""
+            )
         }
     }
 
