@@ -538,16 +538,41 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
 
         val direct = docs.flatMap { (pageUrl, pageDoc) -> directPageAssets(pageDoc, pageUrl) }
             .distinctBy { normalizedUrl(it.url) }
-        if (direct.isNotEmpty()) {
-            return meta to mediaRefs(source, gallery.stableId, direct)
-        }
 
-        // Keep provider archives strictly as fallback for posts that do not expose browsable media.
         val candidates = providerLinks(first)
         val chosen = candidates.sortedBy { providerPriority(it.second) }.firstOrNull()
-            ?: throw AdapterException("CosplayTele post exposed neither direct media nor a supported archive mirror.")
-        val provider = chosen.second
         val password = extractPassword(first)
+
+        if (direct.isNotEmpty()) {
+            val refs = mediaRefs(source, gallery.stableId, direct).toMutableList()
+            val advertisedVideos = advertisedVideoCount(title)
+            val directVideos = direct.count { it.kind == MediaKind.VIDEO }
+
+            // CosplayTele commonly exposes the photos in the post while the videos
+            // exist only in the downloadable archive. When the title advertises more
+            // videos than are directly embedded, add one archive supplement and
+            // extract only its video entries to avoid duplicating the direct photos.
+            if (advertisedVideos > directVideos && chosen != null) {
+                refs += MediaRef(
+                    source = source,
+                    stableId = shaText("video-archive:" + chosen.first).take(24),
+                    galleryStableId = gallery.stableId,
+                    index = refs.size,
+                    url = chosen.first,
+                    normalizedUrl = normalizedUrl(chosen.first),
+                    referer = gallery.canonicalUrl,
+                    mimeHint = "application/zip",
+                    kind = MediaKind.ARCHIVE,
+                    provider = chosen.second,
+                    archivePassword = password,
+                    archiveVideosOnly = true
+                )
+            }
+            return meta to refs
+        }
+
+        // If nothing is browsable directly, fall back to the complete provider archive.
+        chosen ?: throw AdapterException("CosplayTele post exposed neither direct media nor a supported archive mirror.")
         return meta to listOf(
             MediaRef(
                 source = source,
@@ -559,7 +584,7 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                 referer = gallery.canonicalUrl,
                 mimeHint = "application/zip",
                 kind = MediaKind.ARCHIVE,
-                provider = provider,
+                provider = chosen.second,
                 archivePassword = password
             )
         )
@@ -600,6 +625,12 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
             page to href
         }.minByOrNull { it.first }?.second
     }
+
+    private fun advertisedVideoCount(title: String): Int =
+        Regex("""(?i)(\d+)\s*videos?\b""")
+            .findAll(title)
+            .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+            .maxOrNull() ?: 0
 
     private fun providerLinks(doc: Document): List<Pair<String, String>> {
         val found = linkedMapOf<String, String>()
