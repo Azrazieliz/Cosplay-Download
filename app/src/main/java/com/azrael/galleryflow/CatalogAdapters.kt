@@ -350,7 +350,6 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                 if (host != "cosplaytele.com" && host != "www.cosplaytele.com") continue
                 val slug = uri.path.trim('/')
                 if (slug.isBlank() || '/' in slug || slug in NON_POST_SLUGS) continue
-                if (!Regex("(?i)(photos?|videos?|gifs?|cosplay|vol\\.|part)").containsMatchIn(text)) continue
                 if (!seen.add(slug)) continue
                 yield(GalleryRef(source, slug, entity.stableId, "https://cosplaytele.com/$slug/", text.ifBlank { slug }))
             }
@@ -433,8 +432,8 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
 
     private fun providerPriority(provider: String): Int = when (provider) {
         "MediaFire" -> 0
-        "Gofile" -> 1
-        "SoraFolder" -> 2
+        "SoraFolder" -> 1
+        "Gofile" -> 2
         "Telegram" -> 3
         else -> 9
     }
