@@ -24,6 +24,7 @@ enum class TransferState(val dbValue: String) {
 }
 
 enum class SyncMode { LIVE, BACKFILL }
+enum class MediaKind { IMAGE, VIDEO, ARCHIVE }
 
 data class SourceEntity(
     val source: SourceId,
@@ -61,7 +62,11 @@ data class MediaRef(
     val url: String,
     val normalizedUrl: String,
     val referer: String,
-    val mimeHint: String? = null
+    val mimeHint: String? = null,
+    val kind: MediaKind = MediaKind.IMAGE,
+    val provider: String? = null,
+    val archivePassword: String? = null,
+    val archiveVideosOnly: Boolean = false
 )
 
 data class EntityRecord(
@@ -101,6 +106,21 @@ data class DownloadResult(
     val aHash64: String?
 )
 
+data class ExtractedDownload(
+    val media: MediaRef,
+    val result: DownloadResult
+)
+
+data class DownloadOutcome(
+    val primary: DownloadResult,
+    val extracted: List<ExtractedDownload> = emptyList()
+)
+
 class AdapterException(message: String, cause: Throwable? = null) : Exception(message, cause)
 class HttpStatusException(val code: Int, message: String) : Exception(message)
 class SyncCancelledException : Exception("Sync cancelled")
+class InteractiveProviderRequiredException(
+    val provider: String,
+    val providerUrl: String,
+    message: String = "$provider requires an interactive/account download session."
+) : Exception(message)

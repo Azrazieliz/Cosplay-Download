@@ -9,7 +9,11 @@ import java.util.Locale
 class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     override val source = SourceId.KIUTAKU
     override val enabled = true
-    override val statusLabel = "Enabled"
+    override val statusLabel = "Enabled • direct images • whole-site crawl"
+
+    override fun defaultEntities(): List<SourceEntity> = listOf(
+        SourceEntity(source, "site:all", "Kiutaku — entire site", "https://kiutaku.com/", "site")
+    )
 
     override fun matches(url: String): Boolean = runCatching {
         val host = URI(normalizeInput(url)).host?.lowercase(Locale.ROOT).orEmpty()
@@ -19,8 +23,10 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     override fun resolveEntity(inputUrl: String): SourceEntity {
         val uri = URI(normalizeInput(inputUrl))
         requireHost(uri)
+        val path = uri.path.trimEnd('/')
+        if (path.isBlank()) return defaultEntities().first()
 
-        TAG_PATH.matchEntire(uri.path.trimEnd('/'))?.let { match ->
+        TAG_PATH.matchEntire(path)?.let { match ->
             val id = match.groupValues[1]
             val canonical = "https://kiutaku.com/tag/" + id
             val doc = http.document(canonical)
@@ -32,7 +38,7 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             return SourceEntity(source, "tag:" + id, name, canonical, "tag")
         }
 
-        GALLERY_PATH.matchEntire(uri.path.trimEnd('/'))?.let { match ->
+        GALLERY_PATH.matchEntire(path)?.let { match ->
             val galleryId = match.groupValues[1]
             val canonical = "https://kiutaku.com/" + galleryId
             val doc = http.document(canonical)
@@ -40,8 +46,8 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             if (!cosplayer.isNullOrBlank()) {
                 val tagLink = doc.select("a[href]").firstOrNull { element ->
                     val href = absolute(element, "href")
-                    val path = runCatching { URI(href).path.trimEnd('/') }.getOrDefault("")
-                    TAG_PATH.matches(path) && element.text().trim().equals(cosplayer, ignoreCase = true)
+                    val candidatePath = runCatching { URI(href).path.trimEnd('/') }.getOrDefault("")
+                    TAG_PATH.matches(candidatePath) && element.text().trim().equals(cosplayer, ignoreCase = true)
                 }
                 if (tagLink != null) return resolveEntity(absolute(tagLink, "href"))
             }
@@ -49,7 +55,7 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             return SourceEntity(source, "gallery:" + galleryId, cosplayer ?: title, canonical, "gallery_only")
         }
 
-        throw AdapterException("Kiutaku entity must be a /tag/<id> page or a numeric gallery URL.")
+        return defaultEntities().first()
     }
 
     override fun enumerateGalleries(entity: SourceEntity): Sequence<GalleryRef> = sequence {
@@ -67,7 +73,8 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
         while (!next.isNullOrBlank() && visitedPages.add(next)) {
             if (!SyncControl.checkpoint()) throw SyncCancelledException()
             val doc = http.document(next)
-            for (anchor in doc.select("a[href]")) {
+            val listingAnchors = doc.select(".items-row .item-thumb a[href]").ifEmpty { doc.select("a[href]") }
+            for (anchor in listingAnchors) {
                 val href = absolute(anchor, "href")
                 val match = GALLERY_PATH.matchEntire(runCatching { URI(href).path.trimEnd('/') }.getOrDefault(""))
                     ?: continue
@@ -110,6 +117,12 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             for (candidate in imageCandidates(doc)) {
                 val normalized = normalizeMediaUrl(candidate)
                 if (normalized in media) continue
+                val mediaHost = runCatching { URI(candidate).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+                val mediaReferer = if (mediaHost == "mitaku.net" || mediaHost.endsWith(".mitaku.net")) {
+                    "https://mitaku.net/"
+                } else {
+                    pageUrl
+                }
                 media[normalized] = MediaRef(
                     source = source,
                     stableId = sha256Text(normalized).take(24),
@@ -117,8 +130,9 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
                     index = index++,
                     url = candidate,
                     normalizedUrl = normalized,
-                    referer = pageUrl,
-                    mimeHint = mimeFromPath(candidate)
+                    referer = mediaReferer,
+                    mimeHint = mimeFromPath(candidate),
+                    kind = MediaKind.IMAGE
                 )
             }
         }
@@ -127,24 +141,58 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     }
 
     internal fun imageCandidates(doc: Document): List<String> {
-        val preferred = listOf("article img", ".entry-content img", ".post-content img", "main img")
-            .flatMap { doc.select(it) }.distinct()
-        val elements = if (preferred.isNotEmpty()) preferred else doc.select("img")
-        return elements.mapNotNull { img ->
-            val raw = listOf("data-src", "data-lazy-src", "data-original", "srcset", "src")
-                .mapNotNull { attr -> img.attr(attr).takeIf { it.isNotBlank() } }
-                .firstOrNull() ?: return@mapNotNull null
-            val firstUrl = if (raw.contains(',')) raw.substringBefore(',').trim().substringBefore(' ') else raw.trim()
-            val absolute = runCatching { URI(doc.baseUri()).resolve(firstUrl).toString() }.getOrDefault(firstUrl)
-            if (isGalleryImage(img, absolute)) absolute else null
-        }.distinct()
+        val out = linkedSetOf<String>()
+
+        // Current Kiutaku/Xiutaku/BuonDua-style gallery markup keeps the album
+        // media specifically inside .article-fulltext. Prefer that exact scope.
+        val scoped = doc.select(".article-fulltext img")
+        val elements = if (scoped.isNotEmpty()) scoped else doc.select("article img,main img")
+
+        // Some mirrors wrap the displayed image in a link to the original.
+        // Add these first so the original keeps the gallery's natural order.
+        for (img in elements) {
+            val anchor = img.parents().firstOrNull { it.tagName() == "a" && it.hasAttr("href") } ?: continue
+            val href = absolute(anchor, "href")
+            val path = runCatching { URI(href).path.lowercase(Locale.ROOT) }.getOrDefault("")
+            if (IMAGE_EXTENSIONS.any { path.endsWith(it) }) out += href
+        }
+
+        for (img in elements) {
+            val raw = bestImageAttribute(img) ?: continue
+            val candidate = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
+            if (isGalleryImage(img, candidate)) out += candidate
+        }
+
+        return out.toList()
+    }
+
+    private fun bestImageAttribute(img: Element): String? {
+        for (attr in listOf("data-original", "data-full", "data-src", "data-lazy-src")) {
+            img.attr(attr).trim().takeIf { it.isNotBlank() }?.let { return it }
+        }
+        img.attr("srcset").trim().takeIf { it.isNotBlank() }?.let { srcset ->
+            val candidates = srcset.split(',').mapNotNull { item ->
+                val bits = item.trim().split(Regex("\\s+"))
+                val url = bits.firstOrNull()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val score = bits.getOrNull(1)?.removeSuffix("w")?.toIntOrNull() ?: 0
+                score to url
+            }
+            candidates.maxByOrNull { it.first }?.second?.let { return it }
+        }
+        return img.attr("src").trim().takeIf { it.isNotBlank() }
     }
 
     private fun isGalleryImage(img: Element, url: String): Boolean {
         if (!url.startsWith("http://") && !url.startsWith("https://")) return false
         val lower = url.lowercase(Locale.ROOT)
-        if (listOf("logo","icon","avatar","emoji","ads","banner","favicon","pixel").any { it in lower }) return false
         val path = runCatching { URI(url).path.lowercase(Locale.ROOT) }.getOrDefault(lower)
+        val fileName = path.substringAfterLast('/')
+        if (
+            "/ads/" in path || "/advert" in path || "/banner" in path ||
+            fileName.startsWith("logo") || fileName.startsWith("icon") ||
+            fileName.startsWith("avatar") || fileName.startsWith("favicon") ||
+            fileName.startsWith("pixel") || fileName.startsWith("emoji")
+        ) return false
         val imageLike = IMAGE_EXTENSIONS.any { path.endsWith(it) } ||
             img.attr("alt").contains("photo", ignoreCase = true) ||
             img.classNames().any { it.contains("image", ignoreCase = true) }
@@ -159,17 +207,26 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
             val href = absolute(it, "href")
             if (href !in visited) return href
         }
-        val entityPath = URI(entityUrl).path.trimEnd('/')
-        return doc.select("a[href]").mapNotNull { anchor ->
+
+        val base = URI(entityUrl)
+        val entityPath = base.path.trimEnd('/')
+        val currentPage = Regex("(?:^|&)(?:page|paged)=(\\d+)")
+            .find(runCatching { URI(doc.baseUri()).query.orEmpty() }.getOrDefault(""))
+            ?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+        val candidates = doc.select(".pagination-list a[href],a[href]").mapNotNull { anchor ->
             val href = absolute(anchor, "href")
             if (href in visited) return@mapNotNull null
             val uri = runCatching { URI(href) }.getOrNull() ?: return@mapNotNull null
-            if (uri.host?.lowercase() != "kiutaku.com" || uri.path.trimEnd('/') != entityPath) return@mapNotNull null
-            val page = Regex("(?:^|&)page=(\\d+)").find(uri.query.orEmpty())
+            val host = uri.host?.lowercase(Locale.ROOT)
+            if (host != "kiutaku.com" && host != "www.kiutaku.com") return@mapNotNull null
+            if (uri.path.trimEnd('/') != entityPath) return@mapNotNull null
+            val page = Regex("(?:^|&)(?:page|paged)=(\\d+)").find(uri.query.orEmpty())
                 ?.groupValues?.get(1)?.toIntOrNull()
                 ?: anchor.text().trim().toIntOrNull()
-            if (page == null) null else page to href
-        }.minByOrNull { it.first }?.second
+            if (page == null || page <= currentPage) null else page to href
+        }
+        return candidates.minByOrNull { it.first }?.second
     }
 
     private fun isGalleryPaginationUrl(base: String, candidate: String): Boolean {

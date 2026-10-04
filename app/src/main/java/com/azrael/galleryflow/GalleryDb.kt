@@ -6,7 +6,15 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 1) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 8) {
+    data class SourceStats(
+        val galleries: Int,
+        val complete: Int,
+        val partial: Int,
+        val inaccessible: Int,
+        val mediaComplete: Int
+    )
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("""CREATE TABLE entities(
             source TEXT NOT NULL,
@@ -72,7 +80,196 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         db.execSQL("CREATE INDEX idx_media_gallery ON media(source, gallery_id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("DELETE FROM entities WHERE kind!='site'")
+        }
+        if (oldVersion < 3) {
+            resetProviderFailures(db)
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 4) {
+            // Previous test builds could catalogue hundreds of failures without saving a file.
+            // Keep real completed media only and restart incomplete discovery cleanly.
+            db.execSQL("DELETE FROM media WHERE state!='complete' OR content_uri IS NULL")
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM media m
+                     WHERE m.source=galleries.source
+                       AND m.gallery_id=galleries.gallery_id
+                       AND m.state='complete'
+                       AND m.content_uri IS NOT NULL
+                   )"""
+            )
+            db.execSQL("UPDATE entities SET last_error=NULL, live_cursor=NULL")
+        }
+        if (oldVersion < 5) {
+            // 0.5 changes 4KHD/CosplayTele from archive-first to direct-media-first.
+            // Retry every unfinished gallery with the new parser while preserving real completed files.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source IN ('4khd','cosplaytele')
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source IN ('4khd','cosplaytele')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('4khd','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 6) {
+            // Re-run Kiutaku with its current .article-fulltext parser and revisit
+            // CosplayTele galleries that advertise videos but have no saved video yet.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='kiutaku'
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source='kiutaku'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source='cosplaytele'
+                     AND lower(title) LIKE '%video%'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.mime_type LIKE 'video/%'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('kiutaku','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 7) {
+            // 0.5.2 fixes Kiutaku's uploads/ads false-positive and adds the
+            // real SoraFolder timed-download resolver for CosplayTele videos.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='kiutaku'
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source='kiutaku'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='cosplaytele'
+                     AND content_uri IS NULL
+                     AND (
+                       url LIKE '%sorafolder.com%'
+                       OR state IN ('inaccessible','retrying','partial','downloading')
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source='cosplaytele'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.mime_type LIKE 'video/%'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('kiutaku','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 8) {
+            // 0.5.3 fixes the actual Kiutaku hotlink referer used by downloads
+            // and retries CosplayTele provider-video items with the revised
+            // SoraFolder resolver. Preserve every physically completed file.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='kiutaku'
+                     AND (state!='complete' OR content_uri IS NULL)"""
+            )
+            db.execSQL(
+                """DELETE FROM galleries
+                   WHERE source='kiutaku'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='cosplaytele'
+                     AND content_uri IS NULL
+                     AND url LIKE '%sorafolder.com%'"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source='cosplaytele'
+                     AND state IN ('partial','retrying','inaccessible')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.mime_type LIKE 'video/%'
+                         AND m.content_uri IS NOT NULL
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL, live_cursor=NULL
+                   WHERE source IN ('kiutaku','cosplaytele')"""
+            )
+        }
+    }
+
+    fun ensureEntities(entities: List<SourceEntity>) {
+        entities.forEach(::addEntity)
+    }
 
     fun addEntity(entity: SourceEntity) {
         val values = ContentValues().apply {
@@ -102,7 +299,7 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         readableDatabase.query(
             "entities",
             arrayOf("source","entity_id","display_name","canonical_url","kind","selected","live_enabled","live_cursor","last_sync_at","last_error"),
-            null,null,null,null,"display_name COLLATE NOCASE ASC"
+            null,null,null,null,"source ASC, display_name COLLATE NOCASE ASC"
         ).use { c ->
             while (c.moveToNext()) {
                 out += EntityRecord(
@@ -121,6 +318,44 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         }
         return out
     }
+
+    fun sourceStats(source: SourceId): SourceStats {
+        fun count(sql: String, args: Array<String>): Int =
+            readableDatabase.rawQuery(sql, args).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+
+        val src = source.wireName
+        return SourceStats(
+            galleries = count("SELECT COUNT(*) FROM galleries WHERE source=?", arrayOf(src)),
+            complete = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state=?", arrayOf(src, TransferState.COMPLETE.dbValue)),
+            partial = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state IN (?,?)", arrayOf(src, TransferState.PARTIAL.dbValue, TransferState.RETRYING.dbValue)),
+            inaccessible = count("SELECT COUNT(*) FROM galleries WHERE source=? AND state=?", arrayOf(src, TransferState.INACCESSIBLE.dbValue)),
+            mediaComplete = count("SELECT COUNT(*) FROM media WHERE source=? AND state=?", arrayOf(src, TransferState.COMPLETE.dbValue))
+        )
+    }
+
+    fun retryProviderFailures() {
+        resetProviderFailures(writableDatabase)
+        writableDatabase.execSQL(
+            """UPDATE entities
+               SET last_error=NULL
+               WHERE source IN ('4khd','buondua','cosplaytele')"""
+        )
+    }
+
+    fun firstProviderBlockedMedia(): MediaRecord? =
+        queryMedia(
+            """state=? AND (
+                url LIKE '%terabox%'
+                OR url LIKE '%m.4khd.com%'
+                OR url LIKE '%mediafire.com%'
+                OR url LIKE '%sorafolder.com%'
+                OR url LIKE '%gofile.io%'
+                OR url LIKE '%t.me%'
+            )""".trimIndent(),
+            arrayOf(TransferState.INACCESSIBLE.dbValue),
+            "1",
+            "updated_at ASC"
+        ).firstOrNull()
 
     fun setSelected(source: SourceId, entityId: String, value: Boolean) =
         setEntityBoolean(source, entityId, "selected", value)
@@ -333,4 +568,36 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
 
     private fun stateFromDb(value: String): TransferState =
         TransferState.entries.firstOrNull { it.dbValue == value } ?: TransferState.UNSEEN
+
+    companion object {
+        private fun resetProviderFailures(db: SQLiteDatabase) {
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE content_uri IS NULL
+                     AND state IN ('inaccessible','retrying','partial','downloading')
+                     AND (
+                       url LIKE '%terabox%'
+                       OR url LIKE '%1024tera%'
+                       OR url LIKE '%teraboxapp%'
+                       OR url LIKE '%m.4khd.com%'
+                       OR url LIKE '%mediafire.com%'
+                       OR url LIKE '%sorafolder.com%'
+                       OR url LIKE '%gofile.io%'
+                       OR url LIKE '%t.me%'
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')
+                     AND state IN ('partial','inaccessible','retrying')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                     )"""
+            )
+        }
+    }
 }
