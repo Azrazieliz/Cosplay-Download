@@ -92,13 +92,11 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
         val first = http.document(gallery.canonicalUrl)
         docs[gallery.canonicalUrl] = first
 
-        val pages = first.select("a[href]")
-            .map { absolute(it, "href") }
-            .filter { isGalleryPaginationUrl(gallery.canonicalUrl, it) }
-            .distinct()
-            .sortedBy { paginationNumber(gallery.canonicalUrl, it) }
-
-        for (url in pages) if (url !in docs) docs[url] = http.document(url, gallery.canonicalUrl)
+        val pages = galleryPageUrls(first, gallery.canonicalUrl)
+        for (url in pages) {
+            if (!SyncControl.checkpoint()) throw SyncCancelledException()
+            if (url !in docs) docs[url] = http.document(url, gallery.canonicalUrl)
+        }
 
         val meta = GalleryMeta(
             source = source,
@@ -124,7 +122,7 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
                     index = index++,
                     url = candidate,
                     normalizedUrl = normalized,
-                    referer = pageUrl,
+                    referer = preferredImageReferer(candidate, pageUrl),
                     mimeHint = mimeFromPath(candidate),
                     kind = MediaKind.IMAGE
                 )
@@ -188,6 +186,38 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
         val width = img.attr("width").toIntOrNull()
         val height = img.attr("height").toIntOrNull()
         return !(width != null && height != null && width < 200 && height < 200)
+    }
+
+    private fun galleryPageUrls(first: Document, baseUrl: String): List<String> {
+        val explicitMax = first.select("a[href]").firstOrNull {
+            it.text().trim().equals("End", ignoreCase = true)
+        }?.let {
+            val href = absolute(it, "href")
+            Regex("(?:^|&)(?:page|paged)=(\\d+)").find(runCatching { URI(href).query.orEmpty() }.getOrDefault(""))
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }
+
+        val spanMax = first.selectFirst(".pagination-list>span:last-child")
+            ?.text()?.trim()?.toIntOrNull()
+
+        val linkedMax = first.select("a[href]").mapNotNull {
+            val href = absolute(it, "href")
+            if (!isGalleryPaginationUrl(baseUrl, href)) return@mapNotNull null
+            paginationNumber(baseUrl, href).takeIf { page -> page != Int.MAX_VALUE }
+        }.maxOrNull()
+
+        val max = listOfNotNull(explicitMax, spanMax, linkedMax).maxOrNull() ?: 1
+        if (max <= 1) return emptyList()
+        return (2..max).map { page -> baseUrl.substringBefore('?') + "?page=" + page }
+    }
+
+    private fun preferredImageReferer(candidate: String, pageUrl: String): String {
+        val host = runCatching { URI(candidate).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+        return if (host == "mitaku.net" || host.endsWith(".mitaku.net")) {
+            "https://mitaku.net/"
+        } else {
+            pageUrl
+        }
     }
 
     private fun nextListingPage(doc: Document, entityUrl: String, visited: Set<String>): String? {
