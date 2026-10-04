@@ -54,6 +54,11 @@ data class GalleryMeta(
     val pageUrls: List<String>
 )
 
+data class RemoteMirror(
+    val url: String,
+    val provider: String?
+)
+
 data class MediaRef(
     val source: SourceId,
     val stableId: String,
@@ -65,7 +70,9 @@ data class MediaRef(
     val mimeHint: String? = null,
     val kind: MediaKind = MediaKind.IMAGE,
     val provider: String? = null,
-    val archivePassword: String? = null
+    val archivePassword: String? = null,
+    val nameHint: String? = null,
+    val mirrors: List<RemoteMirror> = emptyList()
 )
 
 data class EntityRecord(
@@ -112,7 +119,15 @@ data class ExtractedDownload(
 
 data class DownloadOutcome(
     val primary: DownloadResult,
-    val extracted: List<ExtractedDownload> = emptyList()
+    val extracted: List<ExtractedDownload> = emptyList(),
+    val extractionError: String? = null
+)
+
+data class ResolvedDownload(
+    val url: String,
+    val referer: String?,
+    val cookie: String? = null,
+    val filenameHint: String? = null
 )
 
 class AdapterException(message: String, cause: Throwable? = null) : Exception(message, cause)
