@@ -126,6 +126,7 @@ class SyncEngine(private val context: Context) {
                 var consecutiveFailures = 0
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
+                    val filesBefore = stats.mediaDownloaded + stats.mediaDeduped
                     when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
                         ProcessResult.COMPLETE -> {
                             consecutiveFailures = 0
@@ -142,15 +143,21 @@ class SyncEngine(private val context: Context) {
                             break
                         }
                         ProcessResult.PARTIAL -> {
-                            consecutiveFailures++
+                            val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
+                            if (filesAfter > filesBefore) {
+                                // Partial gallery still made real filesystem progress.
+                                consecutiveFailures = 0
+                            } else {
+                                consecutiveFailures++
+                            }
                             if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
                                 blocked = true
                                 db.setEntityError(
                                     entity.source,
                                     entity.entityId,
-                                    "Stopped after $MAX_CONSECUTIVE_FAILURES consecutive gallery failures; moved to next source."
+                                    "Stopped after $MAX_CONSECUTIVE_FAILURES zero-file gallery failures; moved to next source."
                                 )
-                                progress("Source failed repeatedly • moving on • " + entity.displayName)
+                                progress("Source produced no files repeatedly • moving on • " + entity.displayName)
                                 break
                             }
                         }
