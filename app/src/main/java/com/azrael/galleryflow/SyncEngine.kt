@@ -123,14 +123,37 @@ class SyncEngine(private val context: Context) {
             progress(prefix)
             try {
                 var blocked = false
+                var consecutiveFailures = 0
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
-                    val result = processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
-                    if (result == ProcessResult.PROVIDER_REQUIRED) {
-                        blocked = true
-                        db.setEntityError(entity.source, entity.entityId, "Provider session required. Backfill paused at this gallery.")
-                        progress("Backfill paused • provider session required • " + entity.displayName)
-                        break
+                    when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
+                        ProcessResult.COMPLETE -> {
+                            consecutiveFailures = 0
+                            db.setEntityError(entity.source, entity.entityId, null)
+                        }
+                        ProcessResult.PROVIDER_REQUIRED -> {
+                            blocked = true
+                            db.setEntityError(
+                                entity.source,
+                                entity.entityId,
+                                "Provider download could not be resolved automatically at " + gallery.title
+                            )
+                            progress("Provider blocked • moving to next source • " + entity.displayName)
+                            break
+                        }
+                        ProcessResult.PARTIAL -> {
+                            consecutiveFailures++
+                            if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                                blocked = true
+                                db.setEntityError(
+                                    entity.source,
+                                    entity.entityId,
+                                    "Stopped after $MAX_CONSECUTIVE_FAILURES consecutive gallery failures; moved to next source."
+                                )
+                                progress("Source failed repeatedly • moving on • " + entity.displayName)
+                                break
+                            }
+                        }
                     }
                     if (serviceQueuedLive(db, files, flow, stats, progress)) {
                         SyncControl.setMode(SyncMode.BACKFILL)
@@ -286,4 +309,8 @@ class SyncEngine(private val context: Context) {
 
     private fun EntityRecord.toSourceEntity() =
         SourceEntity(source, entityId, displayName, canonicalUrl, kind)
+
+    companion object {
+        private const val MAX_CONSECUTIVE_FAILURES = 3
+    }
 }
