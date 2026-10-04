@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="kyora_bg">#090A0D</color>
+    <color name="kyora_surface">#111216</color>
+    <color name="kyora_surface_2">#17191F</color>
+    <color name="kyora_text">#F5F2EB</color>
+    <color name="kyora_muted">#9497A2</color>
+    <color name="kyora_accent">#D7B56D</color>
+    <color name="kyora_accent_2">#F2D9A0</color>
+    <color name="kyora_error">#F06F7B</color>
+</resources>

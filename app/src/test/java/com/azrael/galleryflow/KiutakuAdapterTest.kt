@@ -7,19 +7,30 @@ import org.junit.Test
 
 class KiutakuAdapterTest {
     @Test
-    fun imageCandidatesPreferGalleryImagesAndIgnoreIcons() {
+    fun imageCandidatesUseCurrentArticleFulltextMarkupWithoutRejectingUploadsPath() {
         val html = """
-            <html><body><main>
-              <img src="/assets/logo.png" width="80" height="80" alt="logo">
-              <img data-src="https://img.example/7333/001.jpg?size=full" alt="Example photo 1-0">
-              <img src="https://img.example/7333/002.webp" alt="Example photo 1-1">
-            </main></body></html>
+            <html><body>
+              <div class="header"><img src="/assets/logo.png" width="80" height="80" alt="logo"></div>
+              <div class="article-fulltext">
+                <img loading="lazy"
+                     src="https://mitaku.net/wp-content/uploads/2026/09/Messie-Huang-Chiori-1.jpg"
+                     width="1024" height="683" alt="Messie Huang - Chiori - Mitaku photo 1-0">
+                <img loading="lazy"
+                     src="https://mitaku.net/wp-content/uploads/2026/09/Messie-Huang-Chiori-2.jpg"
+                     width="1024" height="683" alt="Messie Huang - Chiori - Mitaku photo 1-1">
+                <img loading="lazy"
+                     src="https://mitaku.net/wp-content/uploads/2026/09/Messie-Huang-Chiori-3.jpg"
+                     width="1024" height="683" alt="Messie Huang - Chiori - Mitaku photo 1-2">
+              </div>
+            </body></html>
         """.trimIndent()
-        val doc = Jsoup.parse(html, "https://kiutaku.com/7333")
+
+        val doc = Jsoup.parse(html, "https://kiutaku.com/7331")
         val adapter = KiutakuAdapter(HttpClient())
         val urls = adapter.imageCandidates(doc)
-        assertEquals(2, urls.size)
-        assertTrue(urls[0].contains("001.jpg"))
-        assertTrue(urls[1].contains("002.webp"))
+
+        assertEquals(3, urls.size)
+        assertTrue(urls.all { it.contains("mitaku.net/wp-content/uploads/") })
+        assertTrue(urls.none { it.contains("logo.png") })
     }
 }
