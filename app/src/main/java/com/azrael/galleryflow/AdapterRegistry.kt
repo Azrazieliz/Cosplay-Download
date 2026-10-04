@@ -4,8 +4,8 @@ object AdapterRegistry {
     private val http = HttpClient()
     val adapters: List<SourceAdapter> = listOf(
         KiutakuAdapter(http),
-        FourKhdAdapter(http),
         BuonDuaAdapter(http),
+        FourKhdAdapter(http),
         CosplayTeleAdapter(http)
     )
 
