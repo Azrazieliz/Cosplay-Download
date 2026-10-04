@@ -12,8 +12,10 @@ import java.util.Locale
 
 object NetworkRequestRegistry {
     private val active = Collections.synchronizedSet(mutableSetOf<HttpURLConnection>())
+
     fun register(conn: HttpURLConnection) { active += conn }
     fun unregister(conn: HttpURLConnection) { active -= conn }
+
     fun cancelAll() {
         val copy = synchronized(active) { active.toList() }
         copy.forEach { runCatching { it.disconnect() } }
@@ -28,93 +30,231 @@ class HttpClient {
             .timeout(30_000)
             .followRedirects(true)
             .ignoreHttpErrors(true)
-            .header("Accept-Language", "en-US,en;q=0.8")
+            .header("Accept-Language", "en-US,en;q=0.9")
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
         if (!referer.isNullOrBlank()) connection.referrer(referer)
         webCookies(url)?.let { connection.header("Cookie", it) }
+
         val response = connection.execute()
-        if (response.statusCode() !in 200..299) {
-            throw HttpStatusException(response.statusCode(), "HTTP " + response.statusCode() + " for " + url)
-        }
         persistResponseCookies(response.url().toString(), response.headers("Set-Cookie"))
+
+        if (response.statusCode() !in 200..299) {
+            throw HttpStatusException(
+                response.statusCode(),
+                "HTTP " + response.statusCode() + " for " + url
+            )
+        }
+
         return response.parse().also { it.setBaseUri(response.url().toString()) }
     }
 
-    fun resolveDownloadUrl(url: String, referer: String? = null, provider: String? = null): String =
-        resolveDownloadUrlInternal(url, referer, provider, 0)
-
-    private fun resolveDownloadUrlInternal(
+    fun resolveDownloadUrl(
         url: String,
-        referer: String?,
-        provider: String?,
-        depth: Int
-    ): String {
+        referer: String? = null,
+        provider: String? = null,
+        nameHint: String? = null
+    ): ResolvedDownload {
         if (!SyncControl.checkpoint()) throw SyncCancelledException()
-        if (depth > 4) throw InteractiveProviderRequiredException(provider ?: "Archive provider", url)
-
         val normalizedProvider = provider?.lowercase(Locale.ROOT).orEmpty()
-        val uri = runCatching { URI(url) }.getOrNull()
-        val host = uri?.host?.lowercase(Locale.ROOT).orEmpty()
-        val path = uri?.path?.lowercase(Locale.ROOT).orEmpty()
+        val host = hostOf(url)
+        val path = runCatching { URI(url).path.lowercase(Locale.ROOT) }.getOrDefault("")
 
-        if (isDirectFilePath(path)) return url
+        if (isDirectFilePath(path)) {
+            return ResolvedDownload(url, referer, webCookies(url))
+        }
 
         if (normalizedProvider == "mediafire" || "mediafire.com" in host) {
-            val doc = document(url, referer)
-            val direct = doc.selectFirst("a#downloadButton[href],a.input[href],a[aria-label*=download][href]")
-                ?.absUrl("href")?.takeIf { isUsefulDirectUrl(it) }
-                ?: doc.select("a[href]").mapNotNull { a ->
-                    a.absUrl("href").takeIf { isUsefulDirectUrl(it) }
-                }.firstOrNull()
-            if (!direct.isNullOrBlank()) return direct
-            throw InteractiveProviderRequiredException("MediaFire", doc.baseUri())
+            return resolveMediaFire(url, referer)
         }
 
         if (host == "m.4khd.com" || host.endsWith(".4khd.com")) {
-            val doc = document(url, referer)
-            val redirect = extractRedirect(doc)
-            if (!redirect.isNullOrBlank() && redirect != url) {
-                val redirectedProvider = if ("terabox" in hostOf(redirect)) "TeraBox" else provider
-                return resolveDownloadUrlInternal(redirect, url, redirectedProvider, depth + 1)
+            val target = resolve4KhdShortLink(url, referer)
+            if (target == url) {
+                throw InteractiveProviderRequiredException(
+                    "4KHD",
+                    url,
+                    "4KHD short link did not expose its archive target."
+                )
             }
-            throw InteractiveProviderRequiredException("4KHD/TeraBox", doc.baseUri().ifBlank { url })
+            val inferred = when {
+                "terabox" in hostOf(target) || "1024terabox" in hostOf(target) || "4funbox" in hostOf(target) -> "TeraBox"
+                "mediafire.com" in hostOf(target) -> "MediaFire"
+                "gofile.io" in hostOf(target) -> "Gofile"
+                else -> provider
+            }
+            return resolveDownloadUrl(target, url, inferred, nameHint)
         }
 
-        if (normalizedProvider == "terabox" || "terabox" in host) {
-            val doc = document(url, referer)
-            val pageUrl = doc.baseUri().ifBlank { url }
-            val direct = extractTeraBoxDirect(doc)
-            if (!direct.isNullOrBlank()) return direct
-            throw InteractiveProviderRequiredException("TeraBox", pageUrl)
-        }
-
-        if (normalizedProvider in setOf("sorafolder", "gofile", "telegram") ||
-            "sorafolder.com" in host || "gofile.io" in host || host == "t.me"
+        if (
+            normalizedProvider == "terabox" ||
+            "terabox" in host ||
+            "1024terabox" in host ||
+            "4funbox" in host
         ) {
-            val name = when {
-                normalizedProvider.isNotBlank() -> provider ?: "Provider"
-                "sorafolder.com" in host -> "SoraFolder"
-                "gofile.io" in host -> "Gofile"
-                else -> "Telegram"
+            val resolved = TeraBoxResolver().resolve(url, nameHint)
+            return ResolvedDownload(
+                resolved.url,
+                resolved.referer,
+                resolved.cookie,
+                resolved.filename
+            )
+        }
+
+        if (normalizedProvider == "gofile" || "gofile.io" in host) {
+            val resolved = GofileResolver().resolve(url, nameHint)
+            return ResolvedDownload(
+                resolved.url,
+                resolved.referer,
+                resolved.cookie,
+                resolved.filename
+            )
+        }
+
+        if (normalizedProvider == "sorafolder" || "sorafolder.com" in host) {
+            return resolveSoraFolder(url, referer)
+        }
+
+        if (normalizedProvider == "telegram" || host == "t.me" || host.endsWith(".t.me")) {
+            throw InteractiveProviderRequiredException(
+                "Telegram",
+                url,
+                "Telegram mirror requires its own session; another archive mirror should be used."
+            )
+        }
+
+        return ResolvedDownload(url, referer, webCookies(url))
+    }
+
+    private fun resolveMediaFire(url: String, referer: String?): ResolvedDownload {
+        val doc = document(url, referer)
+        val direct = doc.selectFirst(
+            "a#downloadButton[href],a.input[href],a[aria-label*=download][href],a.download_link[href]"
+        )?.absUrl("href")?.takeIf { isUsefulDirectUrl(it) }
+            ?: doc.select("a[href]").mapNotNull { a ->
+                val candidate = a.absUrl("href").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                candidate.takeIf { isUsefulDirectUrl(it) }
+            }.firstOrNull()
+
+        if (!direct.isNullOrBlank()) {
+            return ResolvedDownload(
+                direct,
+                doc.baseUri().ifBlank { url },
+                webCookies(direct),
+                filenameFromUrl(direct)
+            )
+        }
+
+        throw InteractiveProviderRequiredException(
+            "MediaFire",
+            doc.baseUri().ifBlank { url },
+            "MediaFire page did not expose a direct file."
+        )
+    }
+
+    private fun resolveSoraFolder(url: String, referer: String?): ResolvedDownload {
+        val doc = document(url, referer)
+        val candidates = linkedSetOf<String>()
+
+        doc.select("a[href],button[data-url],button[data-href],[data-download]").forEach { element ->
+            listOf("href", "data-url", "data-href", "data-download").forEach { attr ->
+                val raw = element.attr(attr).trim()
+                if (raw.isNotBlank()) {
+                    val absolute = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
+                    if (absolute.startsWith("http")) candidates += absolute
+                }
             }
-            throw InteractiveProviderRequiredException(name, url)
+        }
+
+        val html = unescapeHtmlJs(doc.html())
+        URL_REGEX.findAll(html).forEach { candidates += it.value }
+
+        val direct = candidates.firstOrNull { candidate ->
+            val candidateHost = hostOf(candidate)
+            candidate != url &&
+                candidateHost != "sorafolder.com" &&
+                isUsefulDirectUrl(candidate)
+        }
+
+        if (!direct.isNullOrBlank()) {
+            return ResolvedDownload(
+                direct,
+                doc.baseUri().ifBlank { url },
+                webCookies(direct),
+                filenameFromUrl(direct)
+            )
+        }
+
+        throw InteractiveProviderRequiredException(
+            "SoraFolder",
+            doc.baseUri().ifBlank { url },
+            "SoraFolder did not expose a direct downloadable file."
+        )
+    }
+
+    private fun resolve4KhdShortLink(url: String, referer: String?): String {
+        fun inspect(target: String, ref: String?): String? {
+            val doc = runCatching { document(target, ref) }.getOrNull() ?: return null
+            val final = doc.baseUri().ifBlank { target }
+            if (isProviderTarget(final)) return final
+
+            doc.selectFirst("#custom_button[href],a#custom_button[href],a[href*=terabox]")?.let { button ->
+                val href = button.absUrl("href").ifBlank {
+                    runCatching { URI(final).resolve(button.attr("href")).toString() }
+                        .getOrDefault(button.attr("href"))
+                }
+                if (href.startsWith("http")) return href
+            }
+
+            return extractRedirect(doc)?.takeIf { it.startsWith("http") }
+        }
+
+        inspect(url, referer)?.let { return it }
+
+        val uri = runCatching { URI(url) }.getOrNull() ?: return url
+        val code = uri.path.trim('/').substringAfterLast('/').takeIf { it.isNotBlank() }
+            ?: return url
+
+        val attempts = listOf(
+            "https://m.4khd.com/link/" + code,
+            "https://m.4khd.com/link/" + code + "/",
+            "https://m.4khd.com/vip/index.php?code=" + code
+        )
+        for (candidate in attempts) {
+            inspect(candidate, url)?.let { return it }
         }
 
         return url
     }
 
-    private fun extractRedirect(doc: Document): String? {
-        doc.selectFirst("meta[http-equiv=refresh],meta[http-equiv=Refresh]")?.attr("content")?.let { content ->
-            Regex("(?i)url\\s*=\\s*['\"]?([^'\";]+)").find(content)?.groupValues?.get(1)?.trim()?.let { raw ->
-                return runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
-            }
-        }
+    private fun isProviderTarget(value: String): Boolean {
+        val host = hostOf(value)
+        return "terabox" in host ||
+            "1024terabox" in host ||
+            "4funbox" in host ||
+            "mediafire.com" in host ||
+            "gofile.io" in host ||
+            "sorafolder.com" in host
+    }
 
-        doc.select("a[href]").mapNotNull { it.absUrl("href").takeIf(String::isNotBlank) }
-            .firstOrNull { candidate ->
-                val h = hostOf(candidate)
-                ("terabox" in h || isDirectFilePath(runCatching { URI(candidate).path.lowercase(Locale.ROOT) }.getOrDefault("")))
-            }?.let { return it }
+    private fun extractRedirect(doc: Document): String? {
+        doc.selectFirst("meta[http-equiv=refresh],meta[http-equiv=Refresh]")
+            ?.attr("content")
+            ?.let { content ->
+                Regex("(?i)url\\s*=\\s*['\"]?([^'\";]+)")
+                    .find(content)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.trim()
+                    ?.let { raw ->
+                        return runCatching { URI(doc.baseUri()).resolve(raw).toString() }
+                            .getOrDefault(raw)
+                    }
+            }
+
+        doc.select("a[href]").mapNotNull {
+            it.absUrl("href").takeIf(String::isNotBlank)
+        }.firstOrNull(::isProviderTarget)?.let { return it }
 
         val html = unescapeHtmlJs(doc.html())
         val scripted = listOf(
@@ -123,29 +263,12 @@ class HttpClient {
             Regex("(?i)[\"'](?:url|target|redirect|location)[\"']\\s*:\\s*[\"'](https?://[^\"']+)")
         )
         scripted.forEach { regex ->
-            regex.find(html)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
+            regex.find(html)?.groupValues?.getOrNull(1)?.takeIf(String::isNotBlank)?.let { return it }
         }
-        return URL_REGEX.findAll(html).map { it.value }
-            .firstOrNull { candidate -> "terabox" in hostOf(candidate) }
-    }
 
-    private fun extractTeraBoxDirect(doc: Document): String? {
-        doc.select(
-            "a[download][href],a[href*=download],a[href$=.zip],a[href*=.zip?],a[href$=.mp4],a[href*=.mp4?]"
-        ).mapNotNull { it.absUrl("href").takeIf(String::isNotBlank) }
-            .firstOrNull { isUsefulDirectUrl(it) }
-            ?.let { return it }
-
-        val html = unescapeHtmlJs(doc.html())
-        val keyed = listOf(
-            Regex("(?i)[\"'](?:dlink|downloadUrl|download_url|directUrl|direct_url)[\"']\\s*[:=]\\s*[\"'](https?://[^\"']+)"),
-            Regex("(?i)(https?://[^\"'<>\\s]+(?:\\.zip|\\.mp4|\\.webm)(?:\\?[^\"'<>\\s]*)?)")
-        )
-        keyed.forEach { regex ->
-            regex.find(html)?.groupValues?.getOrNull(1)?.takeIf { isUsefulDirectUrl(it) }?.let { return it }
-        }
-        return URL_REGEX.findAll(html).map { it.value }
-            .firstOrNull { isUsefulDirectUrl(it) && ("download" in it.lowercase(Locale.ROOT) || isDirectFilePath(runCatching { URI(it).path.lowercase(Locale.ROOT) }.getOrDefault(""))) }
+        return URL_REGEX.findAll(html)
+            .map { it.value }
+            .firstOrNull(::isProviderTarget)
     }
 
     private fun unescapeHtmlJs(value: String): String = value
@@ -157,42 +280,62 @@ class HttpClient {
 
     private fun isUsefulDirectUrl(value: String): Boolean {
         if (!value.startsWith("http://") && !value.startsWith("https://")) return false
-        val h = hostOf(value)
-        if (h.endsWith("mediafire.com") && "/folder/" in value) return false
-        val p = runCatching { URI(value).path.lowercase(Locale.ROOT) }.getOrDefault("")
-        return isDirectFilePath(p) ||
+        val host = hostOf(value)
+        if (host.endsWith("mediafire.com") && "/folder/" in value) return false
+        val path = runCatching { URI(value).path.lowercase(Locale.ROOT) }.getOrDefault("")
+        return isDirectFilePath(path) ||
             "download" in value.lowercase(Locale.ROOT) ||
-            h.startsWith("download.") ||
-            h.startsWith("d.")
+            host.startsWith("download.") ||
+            host.startsWith("d.")
     }
 
     private fun isDirectFilePath(path: String): Boolean =
-        listOf(".zip", ".rar", ".7z", ".mp4", ".webm", ".mov", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif")
-            .any { path.endsWith(it) }
+        listOf(
+            ".zip", ".rar", ".7z", ".mp4", ".webm", ".mov", ".mkv",
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"
+        ).any { path.endsWith(it) }
+
+    private fun filenameFromUrl(value: String): String? =
+        runCatching { URI(value).path.substringAfterLast('/').takeIf { it.contains('.') } }.getOrNull()
 
     private fun hostOf(value: String): String =
         runCatching { URI(value).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
 
-    fun open(url: String, referer: String? = null, cookie: String? = null): OpenResponse {
+    fun open(
+        url: String,
+        referer: String? = null,
+        cookie: String? = null
+    ): OpenResponse {
         if (!SyncControl.checkpoint()) throw SyncCancelledException()
+
         val conn = URL(url).openConnection() as HttpURLConnection
         NetworkRequestRegistry.register(conn)
+
         try {
             conn.instanceFollowRedirects = true
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 60_000
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 120_000
             conn.setRequestProperty("User-Agent", USER_AGENT)
             conn.setRequestProperty("Accept", "*/*")
             if (!referer.isNullOrBlank()) conn.setRequestProperty("Referer", referer)
+
             val sessionCookie = cookie?.takeIf { it.isNotBlank() } ?: webCookies(url)
-            if (!sessionCookie.isNullOrBlank()) conn.setRequestProperty("Cookie", sessionCookie)
+            if (!sessionCookie.isNullOrBlank()) {
+                conn.setRequestProperty("Cookie", sessionCookie)
+            }
+
             val code = conn.responseCode
             if (code !in 200..299) {
+                val error = "HTTP " + code + " for " + url
                 conn.disconnect()
                 NetworkRequestRegistry.unregister(conn)
-                throw HttpStatusException(code, "HTTP " + code + " for " + url)
+                throw HttpStatusException(code, error)
             }
-            conn.headerFields["Set-Cookie"]?.let { persistResponseCookies(conn.url.toString(), it) }
+
+            conn.headerFields["Set-Cookie"]?.let {
+                persistResponseCookies(conn.url.toString(), it)
+            }
+
             return OpenResponse(
                 connection = conn,
                 input = BufferedInputStream(conn.inputStream),
@@ -238,7 +381,8 @@ class HttpClient {
     }
 
     companion object {
-        const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126 Mobile Safari/537.36 GalleryFlow/0.2.1"
+        const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36 GalleryFlow/0.3"
         private val URL_REGEX = Regex("https?://[^\\s\"'<>]+", RegexOption.IGNORE_CASE)
     }
 }
