@@ -104,25 +104,42 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
     ): HttpClient.OpenResponse {
         val referers = linkedSetOf<String?>()
         referers += preferredReferer
-        if (media.kind == MediaKind.IMAGE || media.kind == MediaKind.VIDEO) {
-            val root = runCatching {
-                val uri = URI(resolved)
-                uri.scheme + "://" + uri.host + "/"
-            }.getOrNull()
-            referers += root
-            referers += null
-        }
+
+        val root = runCatching {
+            val uri = URI(resolved)
+            uri.scheme + "://" + uri.host + "/"
+        }.getOrNull()
+        referers += root
+        referers += null
 
         var last: Throwable? = null
         for (referer in referers) {
             try {
-                return http.open(resolved, referer)
+                val response = http.open(resolved, referer)
+                val type = response.contentType?.lowercase().orEmpty()
+                val htmlInsteadOfPayload =
+                    type.startsWith("text/html") || type.startsWith("text/plain")
+                if (htmlInsteadOfPayload &&
+                    (media.kind == MediaKind.IMAGE ||
+                     media.kind == MediaKind.VIDEO ||
+                     media.kind == MediaKind.ARCHIVE)
+                ) {
+                    response.close()
+                    last = AdapterException(
+                        "Media endpoint returned " + (type.ifBlank { "text" }) +
+                            " with referer " + (referer ?: "<none>")
+                    )
+                    continue
+                }
+                return response
             } catch (e: HttpStatusException) {
                 last = e
                 if (e.code !in listOf(401, 403)) throw e
             } catch (t: Throwable) {
                 last = t
-                break
+                // Connection/TLS failures can also be referer/path dependent on CDNs.
+                // Try the remaining safe variants before giving up.
+                continue
             }
         }
         throw last ?: AdapterException("Could not open media URL.")
