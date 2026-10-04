@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 8) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 9) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -263,6 +263,45 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
                 """UPDATE entities
                    SET last_error=NULL, live_cursor=NULL
                    WHERE source IN ('kiutaku','cosplaytele')"""
+            )
+        }
+        if (oldVersion < 9) {
+            // Provider-only CosplayTele videos are optional from 0.6 onward.
+            // Remove failed supplemental archive rows so working image galleries
+            // are not permanently shown as partial/provider-blocked.
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE source='cosplaytele'
+                     AND content_uri IS NULL
+                     AND (
+                       url LIKE '%sorafolder.com%'
+                       OR url LIKE '%mediafire.com%'
+                       OR url LIKE '%gofile.io%'
+                       OR url LIKE '%t.me%'
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='complete', last_error=NULL
+                   WHERE source='cosplaytele'
+                     AND EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                         AND m.content_uri IS NOT NULL
+                     )
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state!='complete'
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE entities
+                   SET last_error=NULL
+                   WHERE source='cosplaytele'"""
             )
         }
     }
