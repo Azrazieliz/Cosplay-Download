@@ -127,6 +127,8 @@ class SyncEngine(private val context: Context) {
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
                     val filesBefore = stats.mediaDownloaded + stats.mediaDeduped
+                    val hadPhysicalFilesBefore = db.galleryMedia(gallery.source, gallery.stableId)
+                        .any { it.state == TransferState.COMPLETE && files.exists(it.contentUri) }
                     when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
                         ProcessResult.COMPLETE -> {
                             consecutiveFailures = 0
@@ -134,7 +136,7 @@ class SyncEngine(private val context: Context) {
                         }
                         ProcessResult.PROVIDER_REQUIRED -> {
                             val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
-                            if (filesAfter > filesBefore) {
+                            if (filesAfter > filesBefore || hadPhysicalFilesBefore) {
                                 // A supplemental provider (typically CosplayTele video archive)
                                 // failed after the directly exposed media were already saved.
                                 // Keep the gallery partial for a later retry, but do not block
@@ -159,8 +161,8 @@ class SyncEngine(private val context: Context) {
                         }
                         ProcessResult.PARTIAL -> {
                             val filesAfter = stats.mediaDownloaded + stats.mediaDeduped
-                            if (filesAfter > filesBefore) {
-                                // Partial gallery still made real filesystem progress.
+                            if (filesAfter > filesBefore || hadPhysicalFilesBefore) {
+                                // Partial gallery still has real filesystem progress/content.
                                 consecutiveFailures = 0
                             } else {
                                 consecutiveFailures++
