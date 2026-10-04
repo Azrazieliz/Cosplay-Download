@@ -134,14 +134,32 @@ class KiutakuAdapter(private val http: HttpClient) : SourceAdapter {
     }
 
     internal fun imageCandidates(doc: Document): List<String> {
+        val out = linkedSetOf<String>()
+
+        // Kiutaku frequently wraps the real/original image in an anchor while the <img>
+        // itself is lazy-loaded or a thumbnail. Prefer those original image links.
+        for (anchor in doc.select("a[href]")) {
+            val href = absolute(anchor, "href")
+            val uri = runCatching { URI(href) }.getOrNull() ?: continue
+            val path = uri.path?.lowercase(Locale.ROOT).orEmpty()
+            val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
+            if ((host == "mitaku.net" || host.endsWith(".mitaku.net")) &&
+                IMAGE_EXTENSIONS.any { path.endsWith(it) }
+            ) {
+                out += href
+            }
+        }
+
         val preferred = listOf("article img", ".entry-content img", ".post-content img", "main img")
             .flatMap { doc.select(it) }.distinct()
         val elements = if (preferred.isNotEmpty()) preferred else doc.select("img")
-        return elements.mapNotNull { img ->
-            val raw = bestImageAttribute(img) ?: return@mapNotNull null
-            val absolute = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
-            if (isGalleryImage(img, absolute)) absolute else null
-        }.distinct()
+        for (img in elements) {
+            val raw = bestImageAttribute(img) ?: continue
+            val candidate = runCatching { URI(doc.baseUri()).resolve(raw).toString() }.getOrDefault(raw)
+            if (isGalleryImage(img, candidate)) out += candidate
+        }
+
+        return out.toList()
     }
 
     private fun bestImageAttribute(img: Element): String? {
