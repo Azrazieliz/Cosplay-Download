@@ -230,7 +230,7 @@ internal abstract class DirectGalleryAdapter(
             .joinToString("") { "%02x".format(it) }
 }
 
-class FourKGirlAdapter(http: HttpClient) : DirectGalleryAdapter(
+internal class FourKGirlAdapter(http: HttpClient) : DirectGalleryAdapter(
     http = http,
     source = SourceId.FOUR_K_GIRL,
     host = "4kgirl.com",
@@ -249,7 +249,7 @@ class FourKGirlAdapter(http: HttpClient) : DirectGalleryAdapter(
     }
 }
 
-class EveriaAdapter(http: HttpClient) : DirectGalleryAdapter(
+internal class EveriaAdapter(http: HttpClient) : DirectGalleryAdapter(
     http = http,
     source = SourceId.EVERIA,
     host = "everia.club",
