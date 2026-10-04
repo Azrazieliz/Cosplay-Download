@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 
-class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 1) {
+class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", null, 2) {
     data class SourceStats(
         val galleries: Int,
         val complete: Int,
@@ -80,7 +80,36 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         db.execSQL("CREATE INDEX idx_media_gallery ON media(source, gallery_id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL(
+                """DELETE FROM media
+                   WHERE content_uri IS NULL
+                     AND state='inaccessible'
+                     AND (
+                       url LIKE '%terabox%'
+                       OR url LIKE '%m.4khd.com%'
+                       OR url LIKE '%mediafire.com%'
+                       OR url LIKE '%sorafolder.com%'
+                       OR url LIKE '%gofile.io%'
+                       OR url LIKE '%t.me%'
+                     )"""
+            )
+            db.execSQL(
+                """UPDATE galleries
+                   SET state='pending', last_error=NULL
+                   WHERE source IN ('4khd','buondua','cosplaytele')
+                     AND state IN ('partial','inaccessible','retrying')
+                     AND NOT EXISTS (
+                       SELECT 1 FROM media m
+                       WHERE m.source=galleries.source
+                         AND m.gallery_id=galleries.gallery_id
+                         AND m.state='complete'
+                     )"""
+            )
+            db.execSQL("DELETE FROM entities WHERE kind!='site'")
+        }
+    }
 
     fun ensureEntities(entities: List<SourceEntity>) {
         entities.forEach(::addEntity)
@@ -148,14 +177,20 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         )
     }
 
-    fun firstInaccessibleMedia(): MediaRecord? =
-        queryMedia("state=?", arrayOf(TransferState.INACCESSIBLE.dbValue), "1", "updated_at ASC").firstOrNull()
-
-    fun inaccessibleMediaCount(): Int =
-        readableDatabase.rawQuery(
-            "SELECT COUNT(*) FROM media WHERE state=?",
-            arrayOf(TransferState.INACCESSIBLE.dbValue)
-        ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+    fun firstProviderBlockedMedia(): MediaRecord? =
+        queryMedia(
+            """state=? AND (
+                url LIKE '%terabox%'
+                OR url LIKE '%m.4khd.com%'
+                OR url LIKE '%mediafire.com%'
+                OR url LIKE '%sorafolder.com%'
+                OR url LIKE '%gofile.io%'
+                OR url LIKE '%t.me%'
+            )""".trimIndent(),
+            arrayOf(TransferState.INACCESSIBLE.dbValue),
+            "1",
+            "updated_at ASC"
+        ).firstOrNull()
 
     fun setSelected(source: SourceId, entityId: String, value: Boolean) =
         setEntityBoolean(source, entityId, "selected", value)
