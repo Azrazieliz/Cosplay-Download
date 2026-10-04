@@ -17,28 +17,16 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
-import android.widget.Toast
 
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var sourceList: LinearLayout
-    private lateinit var providerStatus: TextView
     private val handler = Handler(Looper.getMainLooper())
 
     private val poll = object : Runnable {
         override fun run() {
             val snapshot = SyncControl.snapshot()
             status.text = if (snapshot.running) snapshot.message else "Idle"
-            if (::providerStatus.isInitialized) {
-                val pending = runCatching {
-                    GalleryDb(this@MainActivity).use { it.firstProviderBlockedMedia() }
-                }.getOrNull()
-                providerStatus.text = if (pending == null) {
-                    "No provider action required"
-                } else {
-                    "Provider action required for " + sourceName(pending.source)
-                }
-            }
             handler.postDelayed(this, 800L)
         }
     }
@@ -144,40 +132,12 @@ class MainActivity : Activity() {
         sourceList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(sourceList)
 
-        root.addView(label("TERABOX / ARCHIVE PROVIDER", 12f, MUTED).apply {
-            setPadding(0, dp(12), 0, dp(4))
-        })
-        providerStatus = label("No provider action required", 12f, MUTED)
-        root.addView(providerStatus)
-
-        val providerRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        providerRow.addView(Button(this).apply {
-            text = "Connect TeraBox"
-            setOnClickListener { openProvider(ProviderWebActivity.TERABOX_LOGIN_URL) }
-        }, LinearLayout.LayoutParams(0, dp(46), 1f))
-        providerRow.addView(Button(this).apply {
-            text = "Open Blocked Item"
-            setOnClickListener {
-                val pending = GalleryDb(this@MainActivity).use { it.firstProviderBlockedMedia() }
-                if (pending == null) {
-                    Toast.makeText(this@MainActivity, "No blocked provider item", Toast.LENGTH_SHORT).show()
-                } else {
-                    openProvider(pending.url)
-                }
-            }
-        }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
-        root.addView(
-            providerRow,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(6)
-            }
-        )
         root.addView(
             label(
-                "TeraBox opens inside GalleryFlow; Google authentication opens in your normal browser, then GalleryFlow resumes the TeraBox session. Files are stored under Downloads/Cosplay/GalleryFlow.",
+                "Storage: Downloads/Cosplay/GalleryFlow • archive providers are resolved automatically",
                 11f,
                 MUTED
-            ).apply { setPadding(0, dp(4), 0, 0) }
+            ).apply { setPadding(0, dp(10), 0, 0) }
         )
 
         return scroll
@@ -267,13 +227,6 @@ class MainActivity : Activity() {
             Intent(this, SyncForegroundService::class.java)
                 .setAction(SyncForegroundService.ACTION_START)
                 .putExtra(SyncForegroundService.EXTRA_MODE, mode.name)
-        )
-    }
-
-    private fun openProvider(url: String) {
-        startActivity(
-            Intent(this, ProviderWebActivity::class.java)
-                .putExtra(ProviderWebActivity.EXTRA_URL, url)
         )
     }
 
