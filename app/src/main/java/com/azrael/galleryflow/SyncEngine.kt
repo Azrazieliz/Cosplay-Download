@@ -12,15 +12,14 @@ class SyncEngine(private val context: Context) {
         var errors: Int = 0
     )
 
-    private val http = HttpClient()
-
     fun run(mode: SyncMode, progress: (String) -> Unit = {}): Stats {
         val stats = Stats()
         if (!SyncControl.tryStart(mode, queueLiveIfBusy = true)) return stats
         val db = GalleryDb(context)
-        val files = MediaStoreFiles(context, http)
+        val files = MediaStoreFiles(context, HttpClient())
         val flow = FlowLinkEmitter(context, db)
         try {
+            db.ensureEntities(AdapterRegistry.defaultEntities())
             SyncControl.setMode(mode)
             when (mode) {
                 SyncMode.LIVE -> runLive(db, files, flow, stats, progress)
@@ -62,14 +61,22 @@ class SyncEngine(private val context: Context) {
             SyncControl.updateMessage(message)
             progress(message)
             try {
-                val galleries = adapter.enumerateGalleries(entity.toSourceEntity()).toList()
-                val newest = galleries.firstOrNull()?.stableId
+                val iterator = adapter.enumerateGalleries(entity.toSourceEntity()).iterator()
                 if (entity.liveCursor.isNullOrBlank()) {
+                    val newest = if (iterator.hasNext()) iterator.next().stableId else null
                     db.setLiveCursor(entity.source, entity.entityId, newest)
                     progress(entity.displayName + ": Live baseline established")
                     continue
                 }
-                val newOnes = galleries.takeWhile { it.stableId != entity.liveCursor }
+
+                val newOnes = mutableListOf<GalleryRef>()
+                while (iterator.hasNext()) {
+                    if (!SyncControl.checkpoint()) return
+                    val gallery = iterator.next()
+                    if (gallery.stableId == entity.liveCursor) break
+                    newOnes += gallery
+                }
+
                 for (gallery in newOnes.asReversed()) {
                     if (!SyncControl.checkpoint()) return
                     if (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
@@ -167,24 +174,16 @@ class SyncEngine(private val context: Context) {
                 SyncControl.updateMessage(meta.title + " • " + (position + 1) + "/" + mediaItems.size)
                 db.markMediaDownloading(media)
                 try {
-                    val fresh = files.download(entity, meta, media)
-                    val duplicate = db.findCompleteByHash(fresh.sha256)
-                    if (duplicate != null && files.exists(duplicate.contentUri)) {
-                        files.delete(fresh.contentUri)
-                        db.markMediaComplete(
-                            media,
-                            fresh.copy(
-                                contentUri = requireNotNull(duplicate.contentUri),
-                                filename = duplicate.filename ?: fresh.filename
-                            ),
-                            duplicateOf = duplicate.source.wireName + ":" + duplicate.mediaId
-                        )
-                        stats.mediaDeduped++
-                    } else {
-                        db.markMediaComplete(media, fresh)
-                        stats.mediaDownloaded++
-                        flow.mediaDownloaded(entity, meta, media, fresh)
+                    val outcome = files.download(entity, meta, media)
+                    commitDownloaded(entity, meta, media, outcome.primary, db, files, flow, stats)
+                    for (extracted in outcome.extracted) {
+                        db.upsertMedia(entity.entityId, extracted.media)
+                        commitDownloaded(entity, meta, extracted.media, extracted.result, db, files, flow, stats)
                     }
+                } catch (e: InteractiveProviderRequiredException) {
+                    allComplete = false
+                    db.setMediaState(media.source, media.stableId, TransferState.INACCESSIBLE)
+                    progress("Provider session required • " + e.provider + " • " + meta.title)
                 } catch (e: HttpStatusException) {
                     allComplete = false
                     val state = when (e.code) {
@@ -226,6 +225,35 @@ class SyncEngine(private val context: Context) {
             stats.errors++
             db.setGalleryState(ref.source, ref.stableId, TransferState.RETRYING, t.message ?: t.javaClass.simpleName)
             false
+        }
+    }
+
+    private fun commitDownloaded(
+        entity: EntityRecord,
+        meta: GalleryMeta,
+        media: MediaRef,
+        fresh: DownloadResult,
+        db: GalleryDb,
+        files: MediaStoreFiles,
+        flow: FlowLinkEmitter,
+        stats: Stats
+    ) {
+        val duplicate = db.findCompleteByHash(fresh.sha256)
+        if (duplicate != null && files.exists(duplicate.contentUri)) {
+            files.delete(fresh.contentUri)
+            db.markMediaComplete(
+                media,
+                fresh.copy(
+                    contentUri = requireNotNull(duplicate.contentUri),
+                    filename = duplicate.filename ?: fresh.filename
+                ),
+                duplicateOf = duplicate.source.wireName + ":" + duplicate.mediaId
+            )
+            stats.mediaDeduped++
+        } else {
+            db.markMediaComplete(media, fresh)
+            stats.mediaDownloaded++
+            flow.mediaDownloaded(entity, meta, media, fresh)
         }
     }
 
