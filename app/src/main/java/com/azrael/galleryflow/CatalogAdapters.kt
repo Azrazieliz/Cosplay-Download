@@ -561,7 +561,7 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                     url = chosen.first,
                     normalizedUrl = normalizedUrl(chosen.first),
                     referer = gallery.canonicalUrl,
-                    mimeHint = "application/zip",
+                    mimeHint = null,
                     kind = MediaKind.ARCHIVE,
                     provider = chosen.second,
                     archivePassword = password,
@@ -582,7 +582,7 @@ class CosplayTeleAdapter(private val http: HttpClient) : SourceAdapter {
                 url = chosen.first,
                 normalizedUrl = normalizedUrl(chosen.first),
                 referer = gallery.canonicalUrl,
-                mimeHint = "application/zip",
+                mimeHint = null,
                 kind = MediaKind.ARCHIVE,
                 provider = chosen.second,
                 archivePassword = password
