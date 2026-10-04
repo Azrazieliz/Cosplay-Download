@@ -13,7 +13,6 @@ import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.URLUtil
 import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.LinearLayout
@@ -25,10 +24,26 @@ import java.util.Locale
 class ProviderWebActivity : Activity() {
     private lateinit var webView: WebView
     private lateinit var status: TextView
-    private var waitingForGoogleReturn = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val url = intent.getStringExtra(EXTRA_URL)?.takeIf { it.startsWith("http") }
+            ?: run {
+                finish()
+                return
+            }
+
+        if (shouldUseExternalBrowser(url)) {
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            }.onFailure {
+                Toast.makeText(this, it.message ?: "No browser available", Toast.LENGTH_LONG).show()
+            }
+            finish()
+            return
+        }
+
         window.statusBarColor = Color.rgb(17, 18, 22)
         window.navigationBarColor = Color.rgb(17, 18, 22)
 
@@ -36,40 +51,20 @@ class ProviderWebActivity : Activity() {
             setTextColor(Color.WHITE)
             textSize = 13f
             setPadding(dp(12), dp(10), dp(12), dp(10))
-            text = "TeraBox session"
+            text = "Provider page"
         }
 
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.databaseEnabled = true
-            settings.javaScriptCanOpenWindowsAutomatically = false
-            settings.setSupportMultipleWindows(false)
-            settings.userAgentString = settings.userAgentString + " GalleryFlow/0.2.2"
-
+            settings.userAgentString = HttpClient.USER_AGENT
             webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                    val url = request?.url?.toString().orEmpty()
-                    return handleExternalAuth(url)
-                }
-
-                @Deprecated("Deprecated in Android")
-                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
-                    handleExternalAuth(url.orEmpty())
-
-                override fun onPageFinished(view: WebView?, url: String?) {
+                override fun onPageFinished(view: WebView?, pageUrl: String?) {
                     CookieManager.getInstance().flush()
-                    status.text = when {
-                        url.isNullOrBlank() -> "TeraBox session"
-                        url.contains("/wap/outlogin", ignoreCase = true) ->
-                            "TeraBox sign-in • Google opens in your browser"
-                        url.contains("terabox.com", ignoreCase = true) ->
-                            "TeraBox session active"
-                        else -> "Provider page"
-                    }
+                    status.text = pageUrl ?: "Provider page"
                 }
             }
-
             webChromeClient = WebChromeClient()
             setDownloadListener(providerDownloadListener())
         }
@@ -82,80 +77,45 @@ class ProviderWebActivity : Activity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(17, 18, 22))
-            addView(status, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(
+                status,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+            addView(
+                webView,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            )
         }
         setContentView(root)
-
-        if (savedInstanceState == null) {
-            val url = intent.getStringExtra(EXTRA_URL)?.takeIf { it.startsWith("http") }
-                ?: TERABOX_LOGIN_URL
-            webView.loadUrl(url)
-        } else {
-            webView.restoreState(savedInstanceState)
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (waitingForGoogleReturn && ::webView.isInitialized) {
-            waitingForGoogleReturn = false
-            status.text = "Checking TeraBox session…"
-            webView.postDelayed({
-                CookieManager.getInstance().flush()
-                webView.loadUrl(TERABOX_HOME_URL)
-            }, 500L)
-        }
-    }
-
-    override fun onSaveInstanceState(outState: Bundle) {
-        if (::webView.isInitialized) webView.saveState(outState)
-        super.onSaveInstanceState(outState)
+        webView.loadUrl(url)
     }
 
     override fun onBackPressed() {
-        if (::webView.isInitialized && webView.canGoBack()) webView.goBack() else super.onBackPressed()
+        if (::webView.isInitialized && webView.canGoBack()) webView.goBack()
+        else super.onBackPressed()
     }
 
     override fun onDestroy() {
-        CookieManager.getInstance().flush()
         if (::webView.isInitialized) {
+            CookieManager.getInstance().flush()
             webView.stopLoading()
             webView.destroy()
         }
         super.onDestroy()
     }
 
-    private fun handleExternalAuth(url: String): Boolean {
-        if (url.isBlank()) return false
-
-        if (url.startsWith("intent://", ignoreCase = true)) {
-            return runCatching {
-                val intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME)
-                startActivity(intent)
-                true
-            }.getOrDefault(false)
-        }
-
+    private fun shouldUseExternalBrowser(url: String): Boolean {
         val host = runCatching { URI(url).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
-        val isGoogleAuth =
-            host == "accounts.google.com" ||
-                host.endsWith(".accounts.google.com") ||
-                host == "oauth2.googleapis.com" ||
-                host.endsWith(".googleusercontent.com")
-
-        if (!isGoogleAuth) return false
-
-        waitingForGoogleReturn = true
-        status.text = "Finish Google sign-in in your browser, then return to GalleryFlow"
-        return runCatching {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-            true
-        }.getOrElse {
-            waitingForGoogleReturn = false
-            Toast.makeText(this, "No browser available for Google sign-in", Toast.LENGTH_LONG).show()
-            false
-        }
+        return host.contains("terabox") ||
+            host.endsWith("1024tera.com") ||
+            host.endsWith("4funbox.com") ||
+            host.endsWith("nephobox.com") ||
+            host.endsWith("mirrobox.com") ||
+            host.endsWith("momerybox.com") ||
+            host == "accounts.google.com"
     }
 
     private fun providerDownloadListener() = DownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
@@ -179,7 +139,7 @@ class ProviderWebActivity : Activity() {
         }.onSuccess {
             Toast.makeText(
                 this,
-                "Provider download queued in Downloads/Cosplay/GalleryFlow/provider_downloads",
+                "Download queued in Downloads/Cosplay/GalleryFlow/provider_downloads",
                 Toast.LENGTH_LONG
             ).show()
         }.onFailure {
@@ -196,7 +156,5 @@ class ProviderWebActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "url"
-        const val TERABOX_LOGIN_URL = "https://www.terabox.com/wap/outlogin"
-        const val TERABOX_HOME_URL = "https://www.terabox.com/"
     }
 }
