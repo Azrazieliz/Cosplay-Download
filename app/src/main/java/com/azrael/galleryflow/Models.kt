@@ -4,7 +4,9 @@ enum class SourceId(val wireName: String) {
     KIUTAKU("kiutaku"),
     FOUR_K_HD("4khd"),
     BUONDUA("buondua"),
-    COSPLAYTELE("cosplaytele");
+    COSPLAYTELE("cosplaytele"),
+    FOUR_K_GIRL("4kgirl"),
+    EVERIA("everia");
 
     companion object {
         fun fromWire(value: String): SourceId = entries.first { it.wireName == value }
