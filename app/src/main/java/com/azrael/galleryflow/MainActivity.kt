@@ -174,7 +174,7 @@ class MainActivity : Activity() {
         )
         root.addView(
             label(
-                "TeraBox uses its web sign-in page and shares that cookie session with GalleryFlow. Files are stored under Downloads/Cosplay/GalleryFlow.",
+                "TeraBox opens inside GalleryFlow; Google authentication opens in your normal browser, then GalleryFlow resumes the TeraBox session. Files are stored under Downloads/Cosplay/GalleryFlow.",
                 11f,
                 MUTED
             ).apply { setPadding(0, dp(4), 0, 0) }
