@@ -71,9 +71,28 @@ class LiveSiteSmokeTest {
         val resolved = try {
             http.resolveDownloadUrl(archive.url, archive.referer, archive.provider)
         } catch (t: Throwable) {
+            val providerDoc = runCatching { http.document(archive.url, archive.referer) }.getOrNull()
+            val providerDiag = if (providerDoc == null) {
+                " provider-page-unavailable"
+            } else {
+                val buttons = providerDoc.select("button,a[href],[data-url],[data-download],[onclick]")
+                    .filter { it.text().contains("download", true) || it.outerHtml().contains("download", true) }
+                    .take(8)
+                    .joinToString(" || ") { it.outerHtml().replace("\n", " ").take(600) }
+                val scripts = providerDoc.select("script").mapNotNull { script ->
+                    val src = script.attr("src").takeIf { it.isNotBlank() }
+                    val body = script.data().takeIf { it.contains("download", true) || it.contains("timer", true) || it.contains("countdown", true) }
+                    when {
+                        src != null -> "src=" + src
+                        body != null -> "inline=" + body.replace("\n", " ").take(1000)
+                        else -> null
+                    }
+                }.take(12).joinToString(" || ")
+                " providerBase=" + providerDoc.baseUri() + " buttons=" + buttons + " scripts=" + scripts
+            }
             throw AssertionError(
                 "CosplayTele " + archive.provider + " archive could not resolve: " +
-                    (t.message ?: t.javaClass.name) + " url=" + archive.url,
+                    (t.message ?: t.javaClass.name) + " url=" + archive.url + providerDiag,
                 t
             )
         }
@@ -97,10 +116,15 @@ class LiveSiteSmokeTest {
         }
     }
 
-    private fun diagnostic(doc: Document): String =
-        "base=" + doc.baseUri() +
+    private fun diagnostic(doc: Document): String {
+        val samples = doc.select(".article-fulltext img").take(4).joinToString(" || ") {
+            it.outerHtml().replace("\n", " ").take(900)
+        }
+        return "base=" + doc.baseUri() +
             " imgs=" + doc.select("img").size +
             " articleFulltextImgs=" + doc.select(".article-fulltext img").size +
             " mitakuImageLinks=" + doc.select("a[href*=mitaku.net]").size +
-            " imageAnchors=" + doc.select("a[href$=.jpg],a[href$=.jpeg],a[href$=.png],a[href$=.webp]").size
+            " imageAnchors=" + doc.select("a[href$=.jpg],a[href$=.jpeg],a[href$=.png],a[href$=.webp]").size +
+            " samples=" + samples
+    }
 }
