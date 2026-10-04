@@ -50,7 +50,7 @@ class SyncEngine(private val context: Context) {
         stats: Stats,
         progress: (String) -> Unit
     ) {
-        val entities = db.listEntities().filter { it.selected && it.liveEnabled }
+        val entities = orderedEntities(db.listEntities().filter { it.selected && it.liveEnabled })
         stats.entities = maxOf(stats.entities, entities.size)
         for ((entityIndex, entity) in entities.withIndex()) {
             if (!SyncControl.checkpoint()) return
@@ -109,7 +109,7 @@ class SyncEngine(private val context: Context) {
         stats: Stats,
         progress: (String) -> Unit
     ) {
-        val entities = db.listEntities().filter { it.selected }
+        val entities = orderedEntities(db.listEntities().filter { it.selected })
         stats.entities = maxOf(stats.entities, entities.size)
         for ((entityIndex, entity) in entities.withIndex()) {
             if (!SyncControl.checkpoint()) return
@@ -274,6 +274,14 @@ class SyncEngine(private val context: Context) {
             stats.mediaDownloaded++
             flow.mediaDownloaded(entity, meta, media, fresh)
         }
+    }
+
+    private fun orderedEntities(input: List<EntityRecord>): List<EntityRecord> {
+        val order = AdapterRegistry.adapters.mapIndexed { index, adapter -> adapter.source to index }.toMap()
+        return input.sortedWith(
+            compareBy<EntityRecord> { order[it.source] ?: Int.MAX_VALUE }
+                .thenBy { it.displayName.lowercase() }
+        )
     }
 
     private fun EntityRecord.toSourceEntity() =
