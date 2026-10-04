@@ -87,7 +87,7 @@ class SyncEngine(private val context: Context) {
                             db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
                         ProcessResult.PROVIDER_REQUIRED -> {
                             blocked = true
-                            db.setEntityError(entity.source, entity.entityId, "Provider session required before Live Sync can continue.")
+                            db.setEntityError(entity.source, entity.entityId, "Archive provider blocked this item; other sources continue.")
                             break
                         }
                         ProcessResult.PARTIAL -> break
@@ -128,8 +128,8 @@ class SyncEngine(private val context: Context) {
                     val result = processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
                     if (result == ProcessResult.PROVIDER_REQUIRED) {
                         blocked = true
-                        db.setEntityError(entity.source, entity.entityId, "Provider session required. Backfill paused at this gallery.")
-                        progress("Backfill paused • provider session required • " + entity.displayName)
+                        db.setEntityError(entity.source, entity.entityId, "Archive provider blocked this gallery; this source paused.")
+                        progress("Backfill paused • provider unavailable • " + entity.displayName)
                         break
                     }
                     if (serviceQueuedLive(db, files, flow, stats, progress)) {
@@ -178,11 +178,38 @@ class SyncEngine(private val context: Context) {
             db.updateGalleryMeta(meta, mediaItems.size)
             var allComplete = true
             var providerRequired = false
+            var galleryError: String? = null
             for ((position, media) in mediaItems.withIndex()) {
                 if (!SyncControl.checkpoint()) return ProcessResult.PARTIAL
                 db.upsertMedia(entity.entityId, media)
                 val existing = db.media(media.source, media.stableId)
-                if (existing != null && existing.state == TransferState.COMPLETE && files.exists(existing.contentUri)) continue
+                if (existing != null && existing.state == TransferState.COMPLETE && files.exists(existing.contentUri)) {
+                    if (media.kind == MediaKind.ARCHIVE) {
+                        val currentRecords = db.galleryMedia(meta.source, meta.stableId)
+                        val hasExtracted = currentRecords.any {
+                            it.mediaId != media.stableId &&
+                                it.url.startsWith("archive:") &&
+                                it.state == TransferState.COMPLETE &&
+                                files.exists(it.contentUri)
+                        }
+                        if (!hasExtracted) {
+                            val (reExtracted, extractionError) =
+                                files.extractExisting(entity, meta, media, existing)
+                            for (extracted in reExtracted) {
+                                db.upsertMedia(entity.entityId, extracted.media)
+                                commitDownloaded(
+                                    entity, meta, extracted.media, extracted.result,
+                                    db, files, flow, stats
+                                )
+                            }
+                            if (extractionError != null) {
+                                allComplete = false
+                                galleryError = extractionError
+                            }
+                        }
+                    }
+                    continue
+                }
                 if (existing != null && !files.exists(existing.contentUri)) {
                     db.setMediaState(media.source, media.stableId, TransferState.PENDING)
                 }
@@ -196,12 +223,17 @@ class SyncEngine(private val context: Context) {
                         db.upsertMedia(entity.entityId, extracted.media)
                         commitDownloaded(entity, meta, extracted.media, extracted.result, db, files, flow, stats)
                     }
+                    if (outcome.extractionError != null) {
+                        allComplete = false
+                        galleryError = outcome.extractionError
+                    }
                 } catch (e: InteractiveProviderRequiredException) {
                     allComplete = false
                     providerRequired = true
                     db.setMediaState(media.source, media.stableId, TransferState.INACCESSIBLE)
-                    db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL, e.provider + " session required")
-                    progress("Provider session required • " + e.provider + " • " + meta.title)
+                    galleryError = e.message ?: (e.provider + " unavailable")
+                    db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL, galleryError)
+                    progress("Unavailable • " + e.provider + " • " + meta.title)
                     break
                 } catch (e: HttpStatusException) {
                     allComplete = false
@@ -231,7 +263,7 @@ class SyncEngine(private val context: Context) {
                 progress("Complete • " + meta.title)
                 ProcessResult.COMPLETE
             } else {
-                db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL)
+                db.setGalleryState(meta.source, meta.stableId, TransferState.PARTIAL, galleryError)
                 if (providerRequired) ProcessResult.PROVIDER_REQUIRED else ProcessResult.PARTIAL
             }
         } catch (e: HttpStatusException) {
