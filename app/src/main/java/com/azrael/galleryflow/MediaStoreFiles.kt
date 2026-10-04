@@ -14,6 +14,9 @@ import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 import kotlin.math.max
 
 class MediaStoreFiles(private val context: Context, private val http: HttpClient) {
@@ -27,6 +30,9 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
     fun download(entity: EntityRecord, gallery: GalleryMeta, media: MediaRef): DownloadOutcome {
         if (!SyncControl.checkpoint()) throw SyncCancelledException()
         val resolved = http.resolveDownloadUrl(media.url, media.referer, media.provider)
+        if (media.kind == MediaKind.VIDEO && isHls(resolved, media.mimeHint)) {
+            return downloadHls(entity, gallery, media, resolved)
+        }
         val resolvedReferer = when (media.provider?.lowercase()) {
             "terabox" -> "https://www.terabox.com/"
             "mediafire", "sorafolder", "gofile" -> media.url
@@ -91,6 +97,174 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
                 throw t
             }
         }
+    }
+
+    private data class HlsKey(val url: String, val ivHex: String?)
+    private data class HlsSegment(val url: String, val key: HlsKey?, val sequence: Long)
+    private data class HlsMediaPlaylist(
+        val playlistUrl: String,
+        val initUrl: String?,
+        val segments: List<HlsSegment>
+    )
+
+    private fun isHls(url: String, mimeHint: String?): Boolean =
+        url.substringBefore('?').endsWith(".m3u8", true) ||
+            mimeHint.equals("application/vnd.apple.mpegurl", true) ||
+            mimeHint.equals("application/x-mpegURL", true)
+
+    private fun downloadHls(
+        entity: EntityRecord,
+        gallery: GalleryMeta,
+        media: MediaRef,
+        playlistUrl: String
+    ): DownloadOutcome {
+        val playlist = resolveHlsPlaylist(playlistUrl, media.referer, 0)
+        if (playlist.segments.isEmpty()) throw AdapterException("HLS playlist contains no video segments.")
+
+        val fmp4 = playlist.initUrl != null || playlist.segments.any {
+            val path = runCatching { URI(it.url).path.lowercase() }.getOrDefault("")
+            path.endsWith(".m4s") || path.endsWith(".mp4")
+        }
+        val mime = if (fmp4) "video/mp4" else "video/mp2t"
+        val ext = if (fmp4) "mp4" else "ts"
+        val filename = "%04d.%s".format(media.index + 1, ext)
+        val uri = createRow(filename, mime, relativePath(entity, gallery))
+        val digest = MessageDigest.getInstance("SHA-256")
+        val keyCache = mutableMapOf<String, ByteArray>()
+        var bytes = 0L
+
+        try {
+            context.contentResolver.openOutputStream(uri, "w")!!.use { output ->
+                playlist.initUrl?.let { initUrl ->
+                    val init = readRemoteBytes(initUrl, playlist.playlistUrl)
+                    output.write(init)
+                    digest.update(init)
+                    bytes += init.size
+                }
+
+                for (segment in playlist.segments) {
+                    if (!SyncControl.checkpoint()) throw SyncCancelledException()
+                    val raw = readRemoteBytes(segment.url, playlist.playlistUrl)
+                    val data = segment.key?.let { key ->
+                        val keyBytes = keyCache.getOrPut(key.url) {
+                            readRemoteBytes(key.url, playlist.playlistUrl)
+                        }
+                        decryptHlsAes128(raw, keyBytes, key.ivHex, segment.sequence)
+                    } ?: raw
+                    output.write(data)
+                    digest.update(data)
+                    bytes += data.size
+                }
+            }
+            finishRow(uri)
+            val result = DownloadResult(
+                contentUri = uri.toString(),
+                filename = filename,
+                mimeType = mime,
+                bytes = bytes,
+                sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte) },
+                aHash64 = null
+            )
+            return DownloadOutcome(result)
+        } catch (t: Throwable) {
+            runCatching { context.contentResolver.delete(uri, null, null) }
+            throw t
+        }
+    }
+
+    private fun resolveHlsPlaylist(url: String, referer: String?, depth: Int): HlsMediaPlaylist {
+        if (depth > 4) throw AdapterException("Too many nested HLS playlists.")
+        val response = http.textResponse(
+            url,
+            referer,
+            "application/vnd.apple.mpegurl,application/x-mpegURL,text/plain,*/*"
+        )
+        val lines = response.body.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
+
+        val variants = mutableListOf<Pair<Long, String>>()
+        for (i in lines.indices) {
+            val line = lines[i]
+            if (!line.startsWith("#EXT-X-STREAM-INF", true)) continue
+            val bandwidth = Regex("""(?i)BANDWIDTH=(\d+)""")
+                .find(line)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+            val next = lines.drop(i + 1).firstOrNull { !it.startsWith("#") } ?: continue
+            variants += bandwidth to URI(response.finalUrl).resolve(next).toString()
+        }
+        if (variants.isNotEmpty()) {
+            val best = variants.maxByOrNull { it.first }!!.second
+            return resolveHlsPlaylist(best, response.finalUrl, depth + 1)
+        }
+
+        var sequence = Regex("""(?m)^#EXT-X-MEDIA-SEQUENCE:(\d+)""")
+            .find(response.body)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
+        var currentKey: HlsKey? = null
+        var initUrl: String? = null
+        val segments = mutableListOf<HlsSegment>()
+
+        for (line in lines) {
+            when {
+                line.startsWith("#EXT-X-MAP:", true) -> {
+                    val raw = Regex("""(?i)URI=["']([^"']+)["']""")
+                        .find(line)?.groupValues?.getOrNull(1)
+                    if (!raw.isNullOrBlank()) initUrl = URI(response.finalUrl).resolve(raw).toString()
+                }
+                line.startsWith("#EXT-X-KEY:", true) -> {
+                    val method = Regex("""(?i)METHOD=([^,]+)""")
+                        .find(line)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+                    currentKey = when {
+                        method.equals("NONE", true) -> null
+                        method.equals("AES-128", true) -> {
+                            val raw = Regex("""(?i)URI=["']([^"']+)["']""")
+                                .find(line)?.groupValues?.getOrNull(1)
+                                ?: throw AdapterException("Encrypted HLS key URL is missing.")
+                            val iv = Regex("""(?i)(?:^|,)IV=([^,]+)""")
+                                .find(line.substringAfter(':'))?.groupValues?.getOrNull(1)?.trim()
+                            HlsKey(URI(response.finalUrl).resolve(raw).toString(), iv)
+                        }
+                        else -> throw AdapterException("Unsupported HLS encryption method: $method")
+                    }
+                }
+                !line.startsWith("#") -> {
+                    segments += HlsSegment(
+                        URI(response.finalUrl).resolve(line).toString(),
+                        currentKey,
+                        sequence++
+                    )
+                }
+            }
+        }
+        return HlsMediaPlaylist(response.finalUrl, initUrl, segments)
+    }
+
+    private fun readRemoteBytes(url: String, referer: String?): ByteArray =
+        http.open(url, referer).use { response ->
+            response.input.readBytes()
+        }
+
+    private fun decryptHlsAes128(
+        encrypted: ByteArray,
+        key: ByteArray,
+        ivHex: String?,
+        sequence: Long
+    ): ByteArray {
+        if (key.size != 16) throw AdapterException("Invalid HLS AES-128 key length: ${key.size}")
+        val iv = if (!ivHex.isNullOrBlank()) {
+            val clean = ivHex.removePrefix("0x").removePrefix("0X").padStart(32, '0').takeLast(32)
+            ByteArray(16) { index ->
+                clean.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+            }
+        } else {
+            ByteArray(16).also { out ->
+                var value = sequence
+                for (i in 15 downTo 8) {
+                    out[i] = (value and 0xff).toByte()
+                    value = value ushr 8
+                }
+            }
+        }
+        val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv))
+        return cipher.doFinal(encrypted)
     }
 
     private fun openWithFallback(
@@ -383,6 +557,7 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         "video/mp4" -> "mp4"
         "video/webm" -> "webm"
         "video/quicktime" -> "mov"
+        "video/mp2t" -> "ts"
         "application/zip", "application/x-zip-compressed" -> "zip"
         "application/vnd.rar", "application/x-rar-compressed", "application/x-rar" -> "rar"
         else -> {
@@ -415,6 +590,8 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
         "mp4", "m4v" -> "video/mp4"
         "webm" -> "video/webm"
         "mov" -> "video/quicktime"
+        "ts" -> "video/mp2t"
+        "m3u8" -> "application/vnd.apple.mpegurl"
         "zip" -> "application/zip"
         "rar" -> "application/vnd.rar"
         "7z" -> "application/x-7z-compressed"
