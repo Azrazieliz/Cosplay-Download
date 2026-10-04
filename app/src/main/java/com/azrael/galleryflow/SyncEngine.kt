@@ -79,19 +79,21 @@ class SyncEngine(private val context: Context) {
                     newOnes += gallery
                 }
 
+                var blocked = false
                 for (gallery in newOnes.asReversed()) {
                     if (!SyncControl.checkpoint()) return
                     when (processGallery(entity, gallery, adapter, db, files, flow, stats, progress)) {
                         ProcessResult.COMPLETE ->
                             db.setLiveCursor(entity.source, entity.entityId, gallery.stableId)
                         ProcessResult.PROVIDER_REQUIRED -> {
+                            blocked = true
                             db.setEntityError(entity.source, entity.entityId, "Provider session required before Live Sync can continue.")
                             break
                         }
                         ProcessResult.PARTIAL -> break
                     }
                 }
-                db.setEntityError(entity.source, entity.entityId, null)
+                if (!blocked) db.setEntityError(entity.source, entity.entityId, null)
             } catch (t: Throwable) {
                 if (SyncControl.isStopping()) return
                 stats.errors++
@@ -120,10 +122,12 @@ class SyncEngine(private val context: Context) {
             SyncControl.updateMessage(prefix)
             progress(prefix)
             try {
+                var blocked = false
                 for (gallery in adapter.enumerateGalleries(entity.toSourceEntity())) {
                     if (!SyncControl.checkpoint()) return
                     val result = processGallery(entity, gallery, adapter, db, files, flow, stats, progress)
                     if (result == ProcessResult.PROVIDER_REQUIRED) {
+                        blocked = true
                         db.setEntityError(entity.source, entity.entityId, "Provider session required. Backfill paused at this gallery.")
                         progress("Backfill paused • provider session required • " + entity.displayName)
                         break
@@ -134,7 +138,7 @@ class SyncEngine(private val context: Context) {
                         progress("Resuming " + prefix)
                     }
                 }
-                db.setEntityError(entity.source, entity.entityId, null)
+                if (!blocked) db.setEntityError(entity.source, entity.entityId, null)
             } catch (t: Throwable) {
                 if (SyncControl.isStopping()) return
                 stats.errors++
@@ -209,7 +213,7 @@ class SyncEngine(private val context: Context) {
                     db.setMediaState(media.source, media.stableId, state)
                     if (e.code == 429) break
                 } catch (t: Throwable) {
-                    if (SyncControl.isStopping() || t is SyncCancelledException) return false
+                    if (SyncControl.isStopping() || t is SyncCancelledException) return ProcessResult.PARTIAL
                     allComplete = false
                     db.setMediaState(media.source, media.stableId, TransferState.RETRYING)
                 }
