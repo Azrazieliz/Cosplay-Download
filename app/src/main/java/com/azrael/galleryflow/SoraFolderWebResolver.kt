@@ -55,6 +55,9 @@ class SoraFolderWebResolver(private val context: Context) {
                 web.settings.databaseEnabled = true
                 web.settings.javaScriptCanOpenWindowsAutomatically = false
                 web.settings.setSupportMultipleWindows(false)
+                web.settings.userAgentString = HttpClient.USER_AGENT
+                web.onResume()
+                web.resumeTimers()
 
                 CookieManager.getInstance().apply {
                     setAcceptCookie(true)
@@ -109,40 +112,93 @@ class SoraFolderWebResolver(private val context: Context) {
 
     companion object {
         private const val BRIDGE = "GalleryFlowBridge"
-        private const val TIMEOUT_SECONDS = 40L
+        private const val TIMEOUT_SECONDS = 45L
 
         private val RESOLVER_SCRIPT = """
             (function() {
+              let finished = false;
               function send(value) {
+                if (finished) return;
+                finished = true;
                 try { window.GalleryFlowBridge.onResolved(String(value || '')); } catch (_) {}
               }
-              async function resolveGalleryFlowDownload() {
+
+              async function attempt(secondTry) {
                 try {
-                  if (typeof keyEncrypte === 'undefined') {
-                    send('ERROR:SoraFolder key is unavailable');
+                  if (typeof keyEncrypte === 'undefined' || typeof decryptLink !== 'function') {
+                    if (secondTry) {
+                      send('ERROR:SoraFolder page scripts did not initialize');
+                    } else {
+                      setTimeout(function() { attempt(false); }, 250);
+                    }
                     return;
                   }
-                  if (typeof decryptLink !== 'function') {
-                    send('ERROR:SoraFolder decryptor is unavailable');
-                    return;
-                  }
+
                   const response = await fetch('/file-down', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    credentials: 'include',
+                    headers: {
+                      'Accept': 'application/json, text/plain, */*',
+                      'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify({key: keyEncrypte})
                   });
-                  const data = await response.json();
+
+                  const text = await response.text();
+                  let data;
+                  try {
+                    data = JSON.parse(text);
+                  } catch (_) {
+                    if (!secondTry) {
+                      setTimeout(function() { attempt(true); }, 10500);
+                      return;
+                    }
+                    send('ERROR:SoraFolder returned non-JSON response: ' + text.slice(0, 160));
+                    return;
+                  }
+
                   if (data && data.error) {
+                    if (!secondTry) {
+                      setTimeout(function() { attempt(true); }, 10500);
+                      return;
+                    }
                     send('ERROR:' + String(data.error));
                     return;
                   }
-                  const direct = decryptLink(data && data.url ? data.url : '');
-                  send(direct);
+
+                  const encrypted = data && (data.url || data.link || data.download);
+                  const direct = decryptLink(encrypted || '');
+                  if (typeof direct === 'string' && /^https?:\/\//i.test(direct)) {
+                    send(direct);
+                    return;
+                  }
+
+                  if (!secondTry) {
+                    setTimeout(function() { attempt(true); }, 10500);
+                    return;
+                  }
+                  send('ERROR:SoraFolder decryptor returned no HTTP URL');
                 } catch (e) {
+                  if (!secondTry) {
+                    setTimeout(function() { attempt(true); }, 10500);
+                    return;
+                  }
                   send('ERROR:' + (e && e.message ? e.message : String(e)));
                 }
               }
-              setTimeout(resolveGalleryFlowDownload, 10500);
+
+              // Poll until SoraFolder's own obfuscated script has defined its key/decryptor.
+              let polls = 0;
+              const ready = setInterval(function() {
+                polls++;
+                if (typeof keyEncrypte !== 'undefined' && typeof decryptLink === 'function') {
+                  clearInterval(ready);
+                  attempt(false);
+                } else if (polls >= 40) {
+                  clearInterval(ready);
+                  attempt(true);
+                }
+              }, 250);
             })();
         """.trimIndent()
     }
