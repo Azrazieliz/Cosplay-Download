@@ -279,7 +279,14 @@ class HttpClient {
             conn.readTimeout = 90_000
             conn.setRequestProperty("User-Agent", USER_AGENT)
             conn.setRequestProperty("Accept", "*/*")
-            if (!referer.isNullOrBlank()) conn.setRequestProperty("Referer", referer)
+            conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+            conn.setRequestProperty("Cache-Control", "no-cache")
+            conn.setRequestProperty("Pragma", "no-cache")
+            if (!referer.isNullOrBlank()) {
+                conn.setRequestProperty("Referer", referer)
+                conn.setRequestProperty("Sec-Fetch-Mode", "no-cors")
+                conn.setRequestProperty("Sec-Fetch-Site", if (sameSite(url, referer)) "same-site" else "cross-site")
+            }
             val sessionCookie = cookie?.takeIf { it.isNotBlank() } ?: webCookies(url)
             if (!sessionCookie.isNullOrBlank()) conn.setRequestProperty("Cookie", sessionCookie)
 
@@ -304,6 +311,17 @@ class HttpClient {
             runCatching { conn.disconnect() }
             throw t
         }
+    }
+
+    private fun sameSite(url: String, referer: String): Boolean {
+        val a = runCatching { URI(url).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+        val b = runCatching { URI(referer).host?.lowercase(Locale.ROOT).orEmpty() }.getOrDefault("")
+        if (a.isBlank() || b.isBlank()) return false
+        fun base(host: String): String {
+            val parts = host.split('.')
+            return if (parts.size >= 2) parts.takeLast(2).joinToString(".") else host
+        }
+        return base(a) == base(b)
     }
 
     private fun webCookies(url: String): String? =
@@ -337,7 +355,7 @@ class HttpClient {
 
     companion object {
         const val USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36 GalleryFlow/0.3.0"
+            "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36"
         private val URL_REGEX = Regex("https?://[^\\s\"'<>]+", RegexOption.IGNORE_CASE)
     }
 }
