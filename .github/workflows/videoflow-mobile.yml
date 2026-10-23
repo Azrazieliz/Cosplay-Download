@@ -1,0 +1,35 @@
+name: VideoFlow Android (phone install)
+on:
+  push:
+    branches: [videoflow-mobile]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install compile SDK
+        run: yes | sdkmanager "platforms;android-35" "build-tools;35.0.1" || true
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Build installable Android APK
+        run: gradle :app:assembleDebug --no-daemon --console=plain
+      - name: Validate APK
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          $ANDROID_HOME/build-tools/35.0.1/apksigner verify app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoFlow-Android-arm64-installable
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+          if-no-files-found: error
