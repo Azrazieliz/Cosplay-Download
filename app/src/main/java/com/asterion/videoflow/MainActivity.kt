@@ -21,7 +21,7 @@ import java.util.Date
 
 /** Phone-first, navigation-based UI. Download and database services remain unchanged. */
 class MainActivity : Activity() {
-    private val background=Color.rgb(10,14,24)
+    private val backdrop=Color.rgb(10,14,24)
     private val surface=Color.rgb(20,26,41)
     private val elevated=Color.rgb(29,37,55)
     private val stroke=Color.rgb(47,57,78)
@@ -74,13 +74,13 @@ class MainActivity : Activity() {
         if(b!=null){addView(space(5));addView(text(b,13f,muted))}
     }
     private fun pill(label:String,selected:Boolean=false,click:(()->Unit)?=null):TextView=
-        text(label,12f,if(selected)background else muted,true).apply {
+        text(label,12f,if(selected)backdrop else muted,true).apply {
             gravity=Gravity.CENTER;pad(this,13,9)
             background=drawable(if(selected)primary else elevated,30,if(selected)primary else stroke)
             if(click!=null)setOnClickListener{click()}
         }
     private fun button(label:String,solid:Boolean=true,click:()->Unit):TextView =
-        text(label,13f,if(solid)background else white,true).apply{
+        text(label,13f,if(solid)backdrop else white,true).apply{
             gravity=Gravity.CENTER;minHeight=d(48);pad(this,13,13)
             background=drawable(if(solid)primary else elevated,15,if(solid)null else stroke)
             setOnClickListener{click()}
@@ -89,7 +89,7 @@ class MainActivity : Activity() {
         setSingleLine(true);setTextColor(white);setHintTextColor(muted)
         textSize=15f;setText(initial);this.hint=hint
         background=drawable(elevated,14,stroke);pad(this,14,13)
-        selectAllOnFocus=true
+        setSelectAllOnFocus(true)
     }
     private fun lineRow(left:View,right:View):LinearLayout=hbox().apply{
         addView(left,LinearLayout.LayoutParams(0,-2,1f))
@@ -117,14 +117,14 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor=background;window.navigationBarColor=background
+        window.statusBarColor=backdrop;window.navigationBarColor=backdrop
         window.decorView.systemUiVisibility=0
         queueDb=VideoDb(this);queueDb.seed();performerDb=PerformerDb(this)
         Scheduling.ensure(this)
         if(Build.VERSION.SDK_INT>=33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),105)
-        layout=vbox().apply{setBackgroundColor(background)}
+        layout=vbox().apply{setBackgroundColor(backdrop)}
         setContentView(layout)
         makeShell()
         val shared=if(intent?.action==Intent.ACTION_SEND)intent.getStringExtra(Intent.EXTRA_TEXT) else null
@@ -133,7 +133,7 @@ class MainActivity : Activity() {
     private fun makeShell(){
         layout.removeAllViews()
         val header=hbox().apply{pad(this,20,13)}
-        val mark=text("▶",19f,background,true).apply{
+        val mark=text("▶",19f,backdrop,true).apply{
             gravity=Gravity.CENTER;background=grad(primary,secondary,13)
         }
         header.addView(mark,LinearLayout.LayoutParams(d(42),d(42)))
@@ -144,7 +144,7 @@ class MainActivity : Activity() {
         header.addView(heading,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(12)})
         header.addView(pill("SETTINGS",false){settings()})
         layout.addView(header)
-        scroller=ScrollView(this).apply{fillViewport=true;isVerticalScrollBarEnabled=false}
+        scroller=ScrollView(this).apply{isFillViewport=true;isVerticalScrollBarEnabled=false}
         page=vbox().apply{pad(this,18,18)}
         scroller.addView(page)
         layout.addView(scroller,LinearLayout.LayoutParams(-1,0,1f))
