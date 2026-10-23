@@ -48,6 +48,7 @@ class MainActivity : Activity() {
     private var searchGeneration=0
     private var searchProgress="Enter specific keywords to discover matching adult videos."
     private var torSearchNote:String?=null
+    private var webSearchNote:String?=null
     private var progressLabel:TextView?=null
     private val io=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
@@ -509,6 +510,9 @@ class MainActivity : Activity() {
                 inside(notice,text("Search: "+lastSearchQuery,12f,muted),7)
         }
         inside(page,notice,10)
+        webSearchNote?.let { note ->
+            inside(page,text(note,12f,muted),9)
+        }
         torSearchNote?.let {note->
             inside(page,text(note,12f,amber),9)
         }
@@ -552,6 +556,7 @@ class MainActivity : Activity() {
         searching=true
         searchProgress="Searching adult video indexes…"
         torSearchNote=null
+        webSearchNote=null
         renderCurrent()
         val tor=TorAccess.settings(this)
         val onionSources=queueDb.listWatches().map{it.address}
@@ -566,7 +571,8 @@ class MainActivity : Activity() {
                         }
                     }
                 }
-                val publicResults=VideoSearch.search(query,30,progress)
+                var sourceReport:String?=null
+                val publicResults=VideoSearch.search(query,30,progress){report->sourceReport=report}
                 var torMessage:String?=null
                 val onionResults=if(tor.enabled) {
                     try {
@@ -580,13 +586,14 @@ class MainActivity : Activity() {
                     }
                 } else emptyList()
                 (publicResults+onionResults).distinctBy{it.url}
-                    .sortedByDescending{it.score}.take(35) to torMessage
+                    .sortedByDescending{it.score}.take(35) to Pair(torMessage,sourceReport)
             }
             runOnUiThread {
                 if(generation!=searchGeneration)return@runOnUiThread
                 searching=false
                 searchResults=result.getOrNull()?.first ?: emptyList()
-                torSearchNote=result.getOrNull()?.second
+                torSearchNote=result.getOrNull()?.second?.first
+                webSearchNote=result.getOrNull()?.second?.second
                 searchProgress=if(result.isFailure)
                     "Search failed: "+(result.exceptionOrNull()?.message?.take(130)?:"network unavailable")
                     else if(searchResults.isEmpty())
