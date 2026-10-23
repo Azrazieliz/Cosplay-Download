@@ -9,8 +9,8 @@ android {
         applicationId = "com.asterion.videoflow"
         minSdk = 29
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7.0"
+        versionCode = 8
+        versionName = "0.8.0"
         ndk { abiFilters += if (project.findProperty("uiSmoke") == "true") listOf("x86_64") else listOf("arm64-v8a") }
     }
     signingConfigs {
@@ -25,7 +25,7 @@ android {
         }
     }
     buildTypes {
-        debug { applicationIdSuffix = ".preview07" }
+        debug { applicationIdSuffix = ".direct08" }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("videoRelease")
