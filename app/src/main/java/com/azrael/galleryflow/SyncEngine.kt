@@ -9,6 +9,7 @@ class SyncEngine(private val context: Context) {
         var galleriesCompleted: Int = 0,
         var mediaDownloaded: Int = 0,
         var mediaDeduped: Int = 0,
+        var galleriesSkippedTags: Int = 0,
         var errors: Int = 0
     )
 
@@ -31,7 +32,12 @@ class SyncEngine(private val context: Context) {
                 progress("Running queued Live Sync…")
                 runLive(db, files, flow, stats, progress)
             }
-            val label = mode.name.lowercase().replaceFirstChar { it.uppercase() } + " complete"
+            if (!SyncControl.isStopping() && stats.mediaDownloaded > 0 &&
+                RoundSyncBridge.enabled(context)) {
+                progress(RoundSyncBridge.trigger(context))
+            }
+            val label = mode.name.lowercase().replaceFirstChar { it.uppercase() } +
+                " complete • ${stats.galleriesSkippedTags} tag-skipped"
             SyncControl.finish(if (SyncControl.isStopping()) "Stopped" else label)
         } catch (t: Throwable) {
             if (!SyncControl.isStopping() && t !is SyncCancelledException) stats.errors++
@@ -154,6 +160,14 @@ class SyncEngine(private val context: Context) {
         return try {
             val (meta, mediaItems) = adapter.fetchGallery(ref)
             db.updateGalleryMeta(meta, mediaItems.size)
+            // Metadata is read before downloading any gallery image.
+            val excluded = TagExclusions.firstBlocked(meta.tags, Prefs.excludedTags(context))
+            if (excluded != null) {
+                db.setGalleryState(meta.source, meta.stableId, TransferState.SKIPPED, "Excluded tag: $excluded")
+                stats.galleriesSkippedTags++
+                progress("Skipped tag '$excluded' • " + meta.title)
+                return true // Advance Live cursor without downloading any files.
+            }
             var allComplete = true
             for ((position, media) in mediaItems.withIndex()) {
                 if (!SyncControl.checkpoint()) return false

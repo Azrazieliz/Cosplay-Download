@@ -2,6 +2,7 @@ package com.azrael.galleryflow
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -135,6 +136,36 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { leftMargin = dp(8) })
         root.addView(transport, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
 
+        root.addView(label("DOWNLOAD FILTERS", 12f, MUTED).apply {
+            setPadding(0, dp(18), 0, dp(6))
+        })
+        root.addView(label(
+            "Blocked exact gallery tags (case/Unicode insensitive). A matching gallery is skipped before image downloads; existing files are retained.",
+            12f, MUTED
+        ))
+        root.addView(Button(this).apply {
+            text = "Edit excluded tags"
+            setOnClickListener { showExcludedTagsDialog() }
+        }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+
+        root.addView(label("TERABOX / ROUND SYNC", 12f, MUTED).apply {
+            setPadding(0, dp(18), 0, dp(6))
+        })
+        root.addView(label(
+            "Configure a Round Sync COPY task from Downloads/GalleryFlow to your TeraBox remote. Downloads remain on this device until transfer is confirmed in Round Sync.",
+            12f, MUTED
+        ))
+        root.addView(Button(this).apply {
+            text = "Round Sync settings"
+            setOnClickListener { RoundSyncBridge.showSettings(this@MainActivity) }
+        }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+        root.addView(Button(this).apply {
+            text = "Run TeraBox backup now"
+            setOnClickListener {
+                Toast.makeText(this@MainActivity, RoundSyncBridge.trigger(this@MainActivity), Toast.LENGTH_LONG).show()
+            }
+        }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+
         val autoRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -170,6 +201,27 @@ class MainActivity : Activity() {
         entityList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         root.addView(entityList)
         return scroll
+    }
+
+    private fun showExcludedTagsDialog() {
+        val editor = EditText(this).apply {
+            setText(Prefs.excludedTags(this@MainActivity))
+            hint = "One exact gallery tag per line"
+            minLines = 6
+            gravity = Gravity.TOP
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), dp(8))
+            addView(label("One tag per line. No partial matches; old downloads are not deleted.", 13f, MUTED))
+            addView(editor)
+        }
+        AlertDialog.Builder(this).setTitle("Excluded gallery tags").setView(box)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                Prefs.setExcludedTags(this, editor.text.toString())
+                Toast.makeText(this, "Tag exclusions saved", Toast.LENGTH_SHORT).show()
+            }.show()
     }
 
     private fun renderEntities() {

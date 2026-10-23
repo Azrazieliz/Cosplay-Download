@@ -24,11 +24,11 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
             val mime = response.contentType?.takeIf { it.startsWith("image/") }
                 ?: media.mimeHint ?: "application/octet-stream"
             val ext = extensionFor(mime, media.url)
-            val filename = "%04d.%s".format(media.index + 1, ext)
+            val filename = FlatStoragePolicy.filename(media, ext)
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, filename)
                 put(MediaStore.Downloads.MIME_TYPE, mime)
-                put(MediaStore.Downloads.RELATIVE_PATH, relativePath(entity, gallery))
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/GalleryFlow/")
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
             val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
@@ -73,19 +73,6 @@ class MediaStoreFiles(private val context: Context, private val http: HttpClient
             context.contentResolver.delete(Uri.parse(contentUri), null, null)
         }
     }
-
-    private fun relativePath(entity: EntityRecord, gallery: GalleryMeta): String =
-        Environment.DIRECTORY_DOWNLOADS + "/GalleryFlow/" +
-            safe(entity.source.wireName) + "/" +
-            safe(entity.displayName.ifBlank { entity.entityId }) + "/" +
-            safe(gallery.stableId + " - " + gallery.title)
-
-    private fun safe(value: String): String = value
-        .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        .replace(Regex("\\s+"), " ")
-        .trim()
-        .take(120)
-        .ifBlank { "unknown" }
 
     private fun extensionFor(mime: String, url: String): String = when (mime.lowercase()) {
         "image/jpeg" -> "jpg"
