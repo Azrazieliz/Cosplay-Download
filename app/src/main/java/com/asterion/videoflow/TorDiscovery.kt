@@ -82,7 +82,7 @@ object TorDiscovery {
         for(link in knownSources.filter{TorAccess.isV3Onion(it)}.distinct().take(5)) {
             val page=runCatching{TorAccess.fetch(link,tor)}.getOrNull()?:continue
             for(c in candidates(page,link,query,"Saved onion source",8))
-                candidates.putIfAbsent(c.url,c)
+                collected.putIfAbsent(c.url,c)
         }
         val output=ArrayList<DiscoveryMatch>()
         for(candidate in collected.values.take(10)) {
