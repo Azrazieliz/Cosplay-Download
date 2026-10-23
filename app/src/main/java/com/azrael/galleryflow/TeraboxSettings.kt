@@ -51,7 +51,7 @@ object TeraboxSettings {
             s != "/" && java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFKC)
                 .let { normalized ->
                     normalized.startsWith("/From:", ignoreCase = true) &&
-                    normalized.contains("/", startIndex = 7)
+                    normalized.indexOf("/", startIndex = 7) >= 0
                 }
     }
 
