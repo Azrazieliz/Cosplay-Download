@@ -50,6 +50,24 @@ class PerformerDb(context: Context): SQLiteOpenHelper(context, "videoflow_perfor
         }
         return out
     }
+    fun edit(id:Long,name:String,sites:String,minMinutes:Int):Boolean {
+        val clean=name.trim().replace(Regex("\\s+")," ").take(100)
+        if(clean.length<2 || clean.startsWith("http",true))return false
+        val selection=sites.trim().lowercase().ifBlank{"*"}
+        if(selection!="*" && selection.split(',').any{
+            !AdultSiteCatalog.isAllowedHost(it.trim().removePrefix("www."))
+        })return false
+        val values=ContentValues().apply {
+            put("performer",clean)
+            put("site_selection",selection)
+            put("min_seconds",minMinutes.coerceIn(1,360)*60)
+            put("scan_cursor",0)
+            putNull("last_status")
+        }
+        return runCatching{
+            writableDatabase.update("performer_watches",values,"id=?",arrayOf(id.toString()))>0
+        }.getOrDefault(false)
+    }
     fun remove(id:Long) { writableDatabase.delete("performer_watches","id=?",arrayOf(id.toString())) }
     fun setEnabled(id:Long,value:Boolean) {
         writableDatabase.update("performer_watches",ContentValues().apply {
