@@ -48,3 +48,14 @@ On the authorized Windows machine:
 - Discovery sites, extractor status and actual download compatibility are **not equivalent**. Many custom sites or age-gated sites may be blocked or unsupported. The original four default homepages are present but paused to prevent unrelated automatic downloads.
 - The original manual URL, search, queue, storage, cookie and Round Sync workflows remain available.
 - **Phone-first builds**: GitHub Actions workflow `.github/workflows/videoflow-mobile.yml` creates an installable arm64 debug APK as an artifact on branch `videoflow-mobile`. This debug build is separately signed and cannot update a previously installed production-signed v0.1 APK without the matching production key. Keep the original release signing key outside any public repository.
+
+## Tor hidden-service discovery (v0.6.0)
+
+- **Phone first:** Install and connect [Orbot](https://orbot.app/) on Android. VideoFlow does not install Tor or use a PC.
+- In **Discover → Include dark-web (.onion) sources**, opt in, then set Orbot's local SOCKS port in **Tor connection settings** (9050 is common but not universal). The connection-test button tests only whether the local socket is accepting connections, **not** whether the Tor circuit is healthy.
+- Discovery queries the publicly operated Ahmia Tor index **through the SOCKS proxy** and examines individually supplied v3 onion source pages (saved under **Sites → Add Page or Profile**). Ahmia applies its own content-safety filters and may return no results for adult queries; those filters are not bypassed.
+- Results must match the user's specific keywords and prove both adult content and a video player on the hidden-service page. Listings are not verified for licensing, legality, download feasibility, or authenticity.
+- Onion results are labeled TOR and their URLs can be copied to Tor Browser. **No automatic download is performed merely by searching.** Manually queued `.onion` transfers are routed with `socks5h://127.0.0.1:PORT`. If Orbot is off or the port is unavailable, the transfer fails rather than connecting directly.
+- Regular open-web searches still use the normal network. Enabling onion results does not anonymously proxy all of VideoFlow. Sites may require authentication, reject automated retrieval or use media DRM that the app does not bypass.
+- This feature is not a universal dark-web crawler. The public index and user-specified sources only cover a subset of hidden services; search completeness is impossible to guarantee.
+- Use it only for legal, consensual media you are authorized to access and save.
