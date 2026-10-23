@@ -145,7 +145,14 @@ object VideoSearch {
                 }
                 if(!examined.add(url))continue
                 if(!SearchRelevance.adultHost(url)) {
-                    if(checkedUnusual>=6)continue
+                    val terms=SearchRelevance.requestedTerms(phrase)
+                    val words=SearchRelevance.canonical(item.title+" "+item.snippet)
+                        .split(' ').toSet()
+                    // Spend metadata checks only on results that already mention the
+                    // requested subject, not the first unrelated unknown websites.
+                    if(terms.any {it !in words && (it+"s") !in words &&
+                            !(it.endsWith("s")&&it.dropLast(1) in words)})continue
+                    if(checkedUnusual>=8)continue
                     checkedUnusual++
                 }
                 val match=matched(phrase,item)?:continue
