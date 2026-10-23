@@ -54,4 +54,15 @@ class SearchRelevanceTest {
         assertFalse(decide("porn videos","generic porn",
             "https://www.xvideos.com/video1234567/example").accept)
     }
+    @Test fun irrelevantVideoTitleNotRescuedBySearchSnippet(){
+        assertFalse(decide("silver garden","Silver Moon",
+            "https://www.xvideos.com/video1234567/a-video",
+            "You might also like Garden videos").accept)
+    }
+    @Test fun realVideoMetadataCanSatisfyMixedTitleAndDescription(){
+        assertTrue(decide("silver garden","Silver Moon",
+            "https://obscure.example/watch/abc", "Garden performer in this video",
+            video=true,adult=true).accept)
+    }
+
 }
