@@ -59,3 +59,13 @@ On the authorized Windows machine:
 - Regular open-web searches still use the normal network. Enabling onion results does not anonymously proxy all of VideoFlow. Sites may require authentication, reject automated retrieval or use media DRM that the app does not bypass.
 - This feature is not a universal dark-web crawler. The public index and user-specified sources only cover a subset of hidden services; search completeness is impossible to guarantee.
 - Use it only for legal, consensual media you are authorized to access and save.
+
+
+## v0.7: Connection repair and honest search coverage
+
+- The prior connection button only checked TCP 127.0.0.1:9050. That was not a Tor verification. The new **Test Tor Connection** tries the saved port plus 9050 and 9150, tests the actual Tor route using `https://check.torproject.org/api/ip` **over SOCKS**, and displays whether Tor was verified. A successful response with `IsTor: true` is required for the verified status. The test runs on a background thread.
+- For proxy mode, open Orbot on Android, enable Power User Mode, connect, verify its SOCKS setting, then return to VideoFlow. A different VPN or Orbot background restrictions can prevent connection.
+- Ahmia publicly states it filters sexually related queries; v0.7 does **not** try to evade those filters. Tor adult-video discovery is now limited to explicitly added v3 onion video/source pages. Without those pages the UI explains why there can be no results; it no longer treats an empty Ahmia response as an exhaustive search.
+- Ordinary adult web discovery now includes more first-party search endpoints and per-provider failures/number of inspected candidates are shown, so results missing due to captcha/HTTP errors are distinguished from irrelevant matches.
+- Adult-category words `porn`, `xxx`, `adult`, `nsfw` etc. are interpreted as subject constraints, not quietly dropped; specific other keywords must still match the video's title/evidence.
+- No actual Tor or website compatibility is guaranteed until verified on a connected Android device. This is a separate preview app to protect earlier installed data.
