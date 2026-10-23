@@ -81,6 +81,10 @@ object SearchRelevance {
             return Decision(false,"Missing one or more requested keywords",0)
         val video=isVideoUrl(evidence.url)||evidence.pageVideo
         if(!video)return Decision(false,"Not a confirmed video page",0)
+        // Unknown and mainstream hosts must provide both real player metadata
+        // and explicit adult-content metadata. A video-looking path is not proof.
+        if(!sourceAdult && (!evidence.pageVideo || !evidence.pageAdult))
+            return Decision(false,"Unverified adult video page",0)
         // Unknown domains, including YouTube, cannot be treated as adult solely because a
         // search engine returned them for a porn query. Require actual adult page evidence.
         val adult=sourceAdult||evidence.pageAdult||
