@@ -70,13 +70,13 @@ object TorDiscovery {
     fun search(query:String,tor:TorOptions,knownSources:List<String>,
                onProgress:((String)->Unit)?=null):List<DiscoveryMatch>{
         TorAccess.check(tor) // Strictly abort if SOCKS is absent; no clearnet fallback.
-        val candidates=linkedMapOf<String,Candidate>()
+        val collected=linkedMapOf<String,Candidate>()
         onProgress?.invoke("Searching Ahmia's Tor index…")
         // Ahmia implements its own safety filtering, which we do not bypass.
         val index="https://ahmia.fi/search/?q="+URLEncoder.encode(query,"UTF-8")
         val indexPage=runCatching{TorAccess.fetch(index,tor)}.getOrNull()
         if(indexPage!=null) for(c in candidates(indexPage,index,query,"Ahmia",8)){
-            candidates.putIfAbsent(c.url,c)
+            collected.putIfAbsent(c.url,c)
         }
         onProgress?.invoke("Checking your configured onion sources…")
         for(link in knownSources.filter{TorAccess.isV3Onion(it)}.distinct().take(5)) {
@@ -85,7 +85,7 @@ object TorDiscovery {
                 candidates.putIfAbsent(c.url,c)
         }
         val output=ArrayList<DiscoveryMatch>()
-        for(candidate in candidates.values.take(10)) {
+        for(candidate in collected.values.take(10)) {
             onProgress?.invoke("Verifying onion video pages through Tor…")
             val confirmed=inspected(query,candidate,tor)?:continue
             output.add(confirmed)
