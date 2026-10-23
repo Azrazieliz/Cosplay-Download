@@ -17,30 +17,13 @@ class VideoDb(context: Context): SQLiteOpenHelper(context, "videoflow.sqlite", n
         db.execSQL("CREATE INDEX video_queue ON videos(state, updated)")
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
-    fun seed() {
-        val prefs=appContext.getSharedPreferences("video_options",Context.MODE_PRIVATE)
-        if (prefs.getBoolean("sources_seeded",false)) return
-        listOf(
-            "https://www.pornhub.com/" to "Pornhub",
-            "https://notfans.com/" to "NotFans",
-            "https://archivebate.com/" to "ArchiveBate",
-            "https://www.freepornvideos.xxx/" to "FreePornVideos"
-        ).forEach { pair ->
-            addWatch(pair.first, pair.second)
-            listWatches().firstOrNull { it.address == pair.first }?.let { setLiveSeedPaused(it.id) }
-        }
-        prefs.edit().putBoolean("sources_seeded",true).apply()
-    }
     fun addWatch(address: String, label: String = address): Boolean {
         val normalized = address.trim()
-        if (!WebDiscovery.isUrl(normalized) && !normalized.startsWith("search:")) return false
+        if (!WebDiscovery.isUrl(normalized)) return false
         val row = ContentValues().apply {
             put("address", normalized); put("label", label.take(120))
         }
         return writableDatabase.insertWithOnConflict("watches", null, row, SQLiteDatabase.CONFLICT_IGNORE) != -1L
-    }
-    private fun setLiveSeedPaused(id: Long) {
-        writableDatabase.update("watches", ContentValues().apply { put("enabled",0) }, "id=?",arrayOf("$id"))
     }
     fun removeWatch(id: Long) { writableDatabase.delete("watches", "id=?", arrayOf("$id")) }
     fun enableWatch(id: Long, enabled: Boolean) {
