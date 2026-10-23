@@ -11,6 +11,8 @@ class SyncEngine(private val context: Context) {
         var galleriesCompleted: Int = 0,
         var mediaDownloaded: Int = 0,
         var mediaDeduped: Int = 0,
+        var cloudUploaded: Int = 0,
+        var cloudErrors: Int = 0,
         var errors: Int = 0
     )
 
@@ -26,11 +28,22 @@ class SyncEngine(private val context: Context) {
             when (mode) {
                 SyncMode.LIVE -> runLive(db, files, flow, stats, progress)
                 SyncMode.BACKFILL -> runBackfill(db, files, flow, stats, progress)
+                SyncMode.CLOUD -> Unit
             }
             while (!SyncControl.isStopping() && SyncControl.takePendingLive()) {
                 SyncControl.setMode(SyncMode.LIVE)
                 progress("Running queued Live Sync…")
                 runLive(db, files, flow, stats, progress)
+            }
+            if (!SyncControl.isStopping()) {
+                val uploaded = CloudSync(context).drain(
+                    db,
+                    if (mode == SyncMode.CLOUD) 1000 else 12,
+                    progress
+                )
+                stats.cloudUploaded += uploaded.uploaded
+                stats.cloudErrors += uploaded.failures
+                progress("Cloud • ${uploaded.uploaded} uploaded, ${uploaded.pending} pending")
             }
             val label = mode.name.lowercase().replaceFirstChar { it.uppercase() } + " complete"
             SyncControl.finish(if (SyncControl.isStopping()) "Stopped" else label)
