@@ -379,7 +379,8 @@ class MainActivity : Activity() {
         return card
     }
     private fun sourcePage(){
-        inside(page,heading("Sources","Manage supported sites and individual pages to monitor."))
+        inside(page,heading("Sources","Manage regular video sites and your Tor onion sources."))
+        inside(page,button("CONFIGURE TOR / ORBOT",false){torSettings()},12)
         val info=panel()
         info.addView(text("SITE DIRECTORY",12f,secondary,true).apply{letterSpacing=0.08f})
         info.addView(space(6))
@@ -468,6 +469,21 @@ class MainActivity : Activity() {
             }
             startKeywordSearch(query)
         },10)
+        val torPrefs=getSharedPreferences("video_options",MODE_PRIVATE)
+        val torBox=panel()
+        val torToggle=Switch(this).apply {
+            text="Include dark-web (.onion) sources"
+            setTextColor(white);textSize=14f
+            isChecked=torPrefs.getBoolean("tor_enabled",false)
+            setOnCheckedChangeListener{_,enabled->
+                torPrefs.edit().putBoolean("tor_enabled",enabled).apply()
+                if(enabled)toast("Start Orbot and configure its SOCKS port in Tor settings")
+            }
+        }
+        torBox.addView(torToggle)
+        inside(torBox,text("Tor searches use Orbot's local proxy. Public search indexes still use the normal connection. Onion results require verified video metadata.",12f,muted),7)
+        inside(torBox,button("TOR CONNECTION SETTINGS",false){torSettings()},11)
+        inside(page,torBox,13)
         inside(page,text("Sources: adult video sites and broader web indexes. Mainstream sites appear only when the video itself has adult-content evidence.",12f,muted),12)
         inside(page,button("DOWNLOAD FROM A URL INSTEAD",false){addUrl()},15)
         inside(page,bar("SEARCH RESULTS"),24)
@@ -498,9 +514,14 @@ class MainActivity : Activity() {
                 val actions=hbox()
                 actions.addView(button("DOWNLOAD",true){enqueue(hit.url,hit.title)},
                     LinearLayout.LayoutParams(0,-2,1f))
-                actions.addView(button("VIEW SOURCE",false){
-                    runCatching{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(hit.url)))}
-                        .onFailure{toast("Cannot open this video page")}
+                actions.addView(button(if(TorAccess.isOnion(hit.url))"COPY ONION LINK" else "VIEW SOURCE",false){
+                    if(TorAccess.isOnion(hit.url)) {
+                        val clipboard=getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Tor video URL",hit.url))
+                        toast("Onion URL copied. Open it with Tor Browser.")
+                    } else runCatching {
+                        startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(hit.url)))
+                    }.onFailure{toast("Cannot open this video page")}
                 },LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(8)})
                 inside(result,actions,13)
                 inside(page,result,10)
@@ -522,9 +543,12 @@ class MainActivity : Activity() {
         searching=true
         searchProgress="Searching adult video indexes…"
         renderCurrent()
+        val tor=TorAccess.settings(this)
+        val onionSources=queueDb.listWatches().map{it.address}
+            .filter{TorAccess.isV3Onion(it)}
         io.execute {
             val result=runCatching {
-                VideoSearch.search(query,30) { message->
+                val progress:(String)->Unit={ message->
                     runOnUiThread {
                         if(searchGeneration==generation) {
                             searchProgress=message
@@ -532,6 +556,16 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+                val publicResults=VideoSearch.search(query,30,progress)
+                val onionResults=if(tor.enabled) {
+                    try {
+                        TorDiscovery.search(query,tor,onionSources,progress)
+                    } catch(t:Exception) {
+                        progress("Tor unavailable: "+(t.message?: "Proxy connection failed"))
+                        emptyList()
+                    }
+                } else emptyList()
+                (publicResults+onionResults).distinctBy{it.url}.sortedByDescending{it.score}.take(35)
             }
             runOnUiThread {
                 if(generation!=searchGeneration)return@runOnUiThread
@@ -577,6 +611,8 @@ class MainActivity : Activity() {
             .setNegativeButton("Cancel",null).setPositiveButton("ADD"){_,_->
                 val address=field.text.toString().trim()
                 if(!WebDiscovery.isUrl(address))toast("Enter a valid page URL")
+                else if(TorAccess.isOnion(address)&&!TorAccess.isV3Onion(address))
+                    toast("Enter a valid 56-character Tor v3 onion URL")
                 else if(queueDb.addWatch(address,Uri.parse(address).host ?: address)){
                     toast("Page added");renderCurrent()
                 }else toast("This page is already monitored")
@@ -644,6 +680,34 @@ class MainActivity : Activity() {
             }
         }
         dlg.show()
+    }
+    private fun torSettings() {
+        val prefs=getSharedPreferences("video_options",MODE_PRIVATE)
+        val box=vbox().apply{pad(this,18,10)}
+        box.addView(text("VideoFlow connects to Orbot's local SOCKS proxy. Orbot must already be running. A reachable port is not proof that Tor finished connecting.",13f,muted))
+        val field=input("SOCKS port (usually 9050)",
+            prefs.getInt("tor_socks_port",9050).toString()).apply {
+            inputType=InputType.TYPE_CLASS_NUMBER
+        }
+        inside(box,field,12)
+        inside(box,button("TEST LOCAL SOCKS PORT",false) {
+            val port=field.text.toString().toIntOrNull()?:-1
+            toast(if(TorAccess.portReachable(port))
+                "A local proxy is listening. Actual Tor routing not verified."
+                else "Cannot connect. Start Orbot or check its SOCKS port.")
+        },12)
+        inside(box,text("Direct .onion links will never fall back to your ordinary internet connection. Search indexes may filter queries and not every hidden site is searchable.",12f,muted),14)
+        AlertDialog.Builder(this).setTitle("Tor / Orbot")
+            .setView(ScrollView(this).apply{addView(box)})
+            .setNegativeButton("Cancel",null)
+            .setPositiveButton("SAVE"){_,_->
+                val port=field.text.toString().toIntOrNull()
+                if(port==null||port !in 1..65535)toast("Port must be between 1 and 65535")
+                else {
+                    prefs.edit().putInt("tor_socks_port",port).apply()
+                    toast("Tor proxy port saved")
+                }
+            }.show()
     }
     private fun openVideo(v:Video){
         val saved=v.savedUri ?: return
