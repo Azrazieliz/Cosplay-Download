@@ -50,8 +50,16 @@ class SearchRelevanceTest {
         assertTrue(decide("silver garden","Silver Garden",
             "https://unusual.example/videos/123",video=true,adult=true).accept)
     }
-    @Test fun broadPornOnlyQueryRejected(){
-        assertFalse(decide("porn videos","generic porn",
+    @Test fun adultCategoryQueriesAreRecognized(){
+        assertTrue(decide("porn videos","A titled clip",
+            "https://www.xvideos.com/video1234567/example").accept)
+        assertFalse(decide("porn videos","Regular documentary",
+            "https://www.youtube.com/watch?v=1234abcdef").accept)
+    }
+    @Test fun adultQualifierWithSpecificTermKeepsThatTerm(){
+        assertTrue(decide("porn silver garden","Silver Garden Scene",
+            "https://www.xvideos.com/video1234567/example").accept)
+        assertFalse(decide("porn silver garden","Different Garden Scene",
             "https://www.xvideos.com/video1234567/example").accept)
     }
     @Test fun irrelevantVideoTitleNotRescuedBySearchSnippet(){
