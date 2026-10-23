@@ -100,17 +100,18 @@ object VideoSearch {
                 !(it=="foot"&&"feet" in organic) && !(it=="feet"&&"foot" in organic)})return null
         val adultSite=SearchRelevance.adultHost(uri)
         val videoRoute=SearchRelevance.isVideoUrl(uri)
-        if(!videoRoute)return null
+        // Unusual sites often give videos nonstandard URLs. Do not assume a route
+        // is a nonvideo page: require actual page/player metadata instead.
         var verifiedVideo=false
         var verifiedAdult=false
         var title=hit.title
         // Unknown/unusual hosts (including YouTube) require actual page-level adult AND
         // video evidence; an organic snippet merely containing "porn" is insufficient.
-        if(!adultSite) {
+        if(!adultSite || !videoRoute) {
             val meta=pageDetails(uri)?:return null
             verifiedVideo=meta.second
             verifiedAdult=meta.third
-            if(!verifiedVideo||!verifiedAdult)return null
+            if(!verifiedVideo || (!adultSite && !verifiedAdult))return null
             // Retain search headline if site metadata is merely a generic branding title.
             if(meta.first.isNotBlank())title=meta.first.take(170)
         }
