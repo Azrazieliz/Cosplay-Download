@@ -42,7 +42,16 @@ object VideoEngine {
         try {
             val db=VideoDb(context)
             db.recover()
+            try { YtDlp.init(context.applicationContext) }
+            catch(t:Exception) {
+                db.next()?.let { db.update(it.id,"error",error="Video engine unavailable: ${t.message}") }
+                onStatus("Video engine initialization failed")
+                return
+            }
             if(scan) {
+                runCatching {
+                    PerformerScanner.scan(context,db,PerformerDb(context),onStatus)
+                }.onFailure { onStatus("Performer scan issue: ${it.message?.take(100)}") }
                 val settings=context.getSharedPreferences("video_options",Context.MODE_PRIVATE)
                 val max=settings.getInt("max_new",3).coerceIn(1,20)
                 for(watch in db.listWatches().filter { it.enabled }) {
@@ -60,12 +69,6 @@ object VideoEngine {
                         db.checked(watch.id,t.message?: "Discovery failed")
                     }
                 }
-            }
-            try { YtDlp.init(context.applicationContext) }
-            catch(t:Exception) {
-                db.next()?.let { db.update(it.id,"error",error="Video engine unavailable: ${t.message}") }
-                onStatus("Video engine initialization failed")
-                return
             }
             while(true) {
                 val next=db.next() ?: break
