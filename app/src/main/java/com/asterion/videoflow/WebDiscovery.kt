@@ -49,9 +49,9 @@ object WebDiscovery {
         .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0 Mobile Safari/537.36")
         .referrer("https://www.google.com/")
         .timeout(16000).followRedirects(true).maxBodySize(3*1024*1024).get()
-    fun findOnPage(address: String, limit: Int = 12): List<VideoHit> {
+    fun findOnPage(address: String, limit: Int = 12, tor:TorOptions?=null): List<VideoHit> {
         if(!isUrl(address)) return emptyList()
-        val root=open(address)
+        val root=if(TorAccess.isOnion(address)) TorAccess.fetch(address,tor?:TorOptions()) else open(address)
         val host=URI(address).host.lowercase().removePrefix("www.")
         val out=linkedMapOf<String,VideoHit>()
         fun collect(raw: String, title: String) {
@@ -71,10 +71,10 @@ object WebDiscovery {
         }
         return out.values.take(limit.coerceIn(1,50))
     }
-    fun directMedia(address: String): String? {
+    fun directMedia(address: String, tor:TorOptions?=null): String? {
         if(!isUrl(address)) throw IllegalArgumentException("Unsupported address")
         if(mediaTypes.containsMatchIn(address)) return address
-        val doc=open(address)
+        val doc=if(TorAccess.isOnion(address))TorAccess.fetch(address,tor?:TorOptions()) else open(address)
         val fields = doc.select("video[src],video source[src],source[src],meta[property=og:video],meta[property=og:video:url],meta[itemprop=contentUrl],meta[name=twitter:player:stream]")
         for(node in fields) {
             val value=node.attr("abs:src").ifBlank { node.attr("content") }
@@ -89,8 +89,8 @@ object WebDiscovery {
     }
     fun search(query: String, limit: Int=15): List<VideoHit> =
         VideoSearch.search(query,limit).map { VideoHit(it.title,it.url) }
-    fun discover(watch: Watch): List<VideoHit> =
+    fun discover(watch: Watch,tor:TorOptions?=null): List<VideoHit> =
         if(watch.address.startsWith("search:")) search(watch.address.removePrefix("search:"),15)
-        else findOnPage(watch.address, 15)
+        else findOnPage(watch.address, 15,tor)
 }
 
