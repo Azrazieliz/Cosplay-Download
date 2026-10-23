@@ -25,7 +25,10 @@ class VideoDb(context: Context): SQLiteOpenHelper(context, "videoflow.sqlite", n
             "https://notfans.com/" to "NotFans",
             "https://archivebate.com/" to "ArchiveBate",
             "https://www.freepornvideos.xxx/" to "FreePornVideos"
-        ).forEach { addWatch(it.first, it.second) }
+        ).forEach { pair ->
+            addWatch(pair.first, pair.second)
+            listWatches().firstOrNull { it.address == pair.first }?.let { setLiveSeedPaused(it.id) }
+        }
         prefs.edit().putBoolean("sources_seeded",true).apply()
     }
     fun addWatch(address: String, label: String = address): Boolean {
@@ -35,6 +38,9 @@ class VideoDb(context: Context): SQLiteOpenHelper(context, "videoflow.sqlite", n
             put("address", normalized); put("label", label.take(120))
         }
         return writableDatabase.insertWithOnConflict("watches", null, row, SQLiteDatabase.CONFLICT_IGNORE) != -1L
+    }
+    private fun setLiveSeedPaused(id: Long) {
+        writableDatabase.update("watches", ContentValues().apply { put("enabled",0) }, "id=?",arrayOf("$id"))
     }
     fun removeWatch(id: Long) { writableDatabase.delete("watches", "id=?", arrayOf("$id")) }
     fun enableWatch(id: Long, enabled: Boolean) {
