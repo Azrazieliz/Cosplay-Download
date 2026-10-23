@@ -29,9 +29,9 @@ object TorDiscovery {
         return WebDiscovery.normalize(candidate)
     }
     private fun matchesEarly(query:String,title:String):Boolean {
-        val tokens=SearchRelevance.requestedTerms(query)
+        val tokens=SearchRelevance.contentTerms(query)
         val hay=SearchRelevance.canonical(title).split(' ').toSet()
-        return tokens.isNotEmpty() && tokens.all {
+        return tokens.all {
             it in hay || it+"s" in hay ||
                 (it.endsWith("s")&&it.dropLast(1) in hay) ||
                 (it=="foot"&&"feet" in hay) || (it=="feet"&&"foot" in hay)
