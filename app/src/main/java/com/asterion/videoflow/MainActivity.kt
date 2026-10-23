@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     private lateinit var tabs:LinearLayout
     private var screen="home"
     private var downloadFilter="All"
+    private var siteExpanded=false
     private val io=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
     private var foreground=false
@@ -370,12 +371,14 @@ class MainActivity : Activity() {
         val search=input("Search websites")
         inside(page,search,9)
         val holder=vbox()
+        val toggle=button("SHOW ALL "+AdultSiteCatalog.sites.size+" SITES",false){}
+        inside(page,toggle,11)
         inside(page,holder,12)
         fun fill(q:String){
             holder.removeAllViews()
             val matches=AdultSiteCatalog.sites.filter{
                 it.label.contains(q,true)||it.host.contains(q,true)
-            }
+            }.let { all-> if(q.isBlank()&&!siteExpanded)all.take(6) else all }
             matches.forEach {site->
                 val status=when(site.extractor){
                     "dedicated"->"Extractor listed"
@@ -390,6 +393,11 @@ class MainActivity : Activity() {
                 holder.addView(row,LinearLayout.LayoutParams(-1,-2).apply{bottomMargin=d(7)})
             }
             if(matches.isEmpty())holder.addView(emptyState("No site found","You can still add a custom page URL below."))
+        }
+        toggle.setOnClickListener {
+            siteExpanded=!siteExpanded
+            toggle.text=if(siteExpanded)"SHOW FEWER SITES" else "SHOW ALL "+AdultSiteCatalog.sites.size+" SITES"
+            fill(search.text.toString())
         }
         fill("")
         search.addTextChangedListener(object:TextWatcher{
