@@ -42,6 +42,12 @@ class MainActivity : Activity() {
     private var downloadFilter="All"
     private val expandedErrors=mutableSetOf<Long>()
     private var siteExpanded=false
+    private var lastSearchQuery=""
+    private var searchResults:List<DiscoveryMatch> = emptyList()
+    private var searching=false
+    private var searchGeneration=0
+    private var searchProgress="Enter specific keywords to discover matching adult videos."
+    private var progressLabel:TextView?=null
     private val io=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
     private var foreground=false
@@ -163,8 +169,9 @@ class MainActivity : Activity() {
     }
     private fun renderNav(){
         tabs.removeAllViews()
-        listOf(Triple("home","⌂","Home"),Triple("models","◈","Models"),
-            Triple("downloads","↓","Downloads"),Triple("sources","◎","Sources")).forEach { (key,glyph,title)->
+        listOf(Triple("home","⌂","Home"),Triple("search","⌕","Discover"),
+            Triple("models","◈","Models"),Triple("downloads","↓","Downloads"),
+            Triple("sources","◎","Sites")).forEach { (key,glyph,title)->
             val selected=screen==key
             val tab=vbox().apply{gravity=Gravity.CENTER;setOnClickListener{navigate(key)}}
             tab.addView(text(glyph,23f,if(selected)primary else muted,true).apply{gravity=Gravity.CENTER})
@@ -197,11 +204,11 @@ class MainActivity : Activity() {
             background=grad(Color.rgb(45,40,93),Color.rgb(18,57,75),27)
             pad(this,22,23)
         }
-        hero.addView(text("YOUR LIBRARY, ON AUTOPILOT",11f,secondary,true).apply{letterSpacing=0.12f})
+        hero.addView(text("PERSONAL VIDEO ARCHIVE",11f,secondary,true).apply{letterSpacing=0.12f})
         hero.addView(space(11))
-        hero.addView(text("Discover more.\nDownload with control.",27f,white,true))
+        hero.addView(text("Your videos, organized.",25f,white,true))
         hero.addView(space(8))
-        hero.addView(text("Follow performers or add a video link. VideoFlow takes care of discovery and downloads.",13f,Color.rgb(208,217,241)))
+        hero.addView(text("Find matching videos, follow performers, and manage downloads in one place.",13f,Color.rgb(208,217,241)))
         inside(hero,button("+  FOLLOW A PERFORMER"){performerDialog()},17)
         inside(page,hero)
         val metrics=hbox()
@@ -213,7 +220,7 @@ class MainActivity : Activity() {
         inside(page,metrics,14)
         inside(page,bar("QUICK ACTIONS"),26)
         inside(page,clickableCard("PASTE VIDEO URL","Directly download one video from its exact link","↘",primary){addUrl()},12)
-        inside(page,clickableCard("DISCOVER VIDEOS","Search titles, keywords and uncommon websites","⌕",secondary){navigate("search")},10)
+        inside(page,clickableCard("DISCOVER VIDEOS","Adult videos matching your keywords only","⌕",secondary){navigate("search")},10)
         inside(page,bar("AUTOMATION"),25)
         val box=panel()
         val prefs=getSharedPreferences("video_options",MODE_PRIVATE)
@@ -444,51 +451,102 @@ class MainActivity : Activity() {
         inside(this,text(description,13f,muted).apply{gravity=Gravity.CENTER},6)
     }
     private fun searchPage(){
-        inside(page,heading("Discover videos","Search the wider web, including obscure sites. Results are candidates until tested."))
-        inside(page,button("OR PASTE A DIRECT LINK",false){addUrl()},12)
-        val search=input("Search keywords, video titles or performer names")
-        inside(page,search,18)
-        val results=vbox()
-        inside(page,button("SEARCH VIDEOS"){
-            val query=search.text.toString().trim()
-            if(query.isBlank()){toast("Enter a search or URL");return@button}
-            if(WebDiscovery.isUrl(query)){
-                toast("That is a URL. Use Home → PASTE VIDEO URL.")
+        inside(page,heading("Video discovery","Adult videos only. Every specific keyword must match."))
+        val field=input("Enter keywords or a performer's name",lastSearchQuery)
+        inside(page,field,16)
+        inside(page,button(if(searching)"SEARCHING…" else "FIND MATCHING VIDEOS",!searching){
+            val query=field.text.toString().trim()
+            if(query.isBlank()) {
+                toast("Enter keywords to search");return@button
+            }
+            if(WebDiscovery.isUrl(query)) {
+                toast("Use Paste URL for links; Discover is keyword search")
                 return@button
             }
-            results.removeAllViews()
-            results.addView(text("Searching multiple web indexes for video pages…",13f,muted))
-            io.execute {
-                val list=runCatching{VideoSearch.search(query,40)}.getOrDefault(emptyList())
-                runOnUiThread{
-                    results.removeAllViews()
-                    if(list.isEmpty())results.addView(emptyState("No matching pages found",
-                        "The search engines may block automated requests. Try different keywords."))
-                    else {
-                        results.addView(text(list.size.toString()+" CANDIDATE VIDEOS",12f,secondary,true))
-                        results.addView(space(8))
-                        list.forEach { hit ->
-                            val box=panel()
-                            box.addView(text(hit.title,15f,white,true))
-                            inside(box,text(hit.origin+"  •  "+hit.type,12f,secondary),5)
-                            inside(box,text(hit.url,11f,muted),6)
-                            inside(box,text("Candidate result — video availability is not yet verified.",11f,muted),8)
-                            val actions=hbox()
-                            actions.addView(button("DOWNLOAD",false){enqueue(hit.url,hit.title)},
-                                LinearLayout.LayoutParams(0,-2,1f))
-                            actions.addView(button("OPEN PAGE",false){
-                                startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(hit.url)))
-                            },LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(8)})
-                            inside(box,actions,12)
-                            inside(results,box,9)
+            if(SearchRelevance.requestedTerms(query).isEmpty()) {
+                toast("Enter more specific keywords than 'porn video'");return@button
+            }
+            startKeywordSearch(query)
+        },10)
+        inside(page,text("Sources: adult video sites and broader web indexes. Mainstream sites appear only when the video itself has adult-content evidence.",12f,muted),12)
+        inside(page,button("DOWNLOAD FROM A URL INSTEAD",false){addUrl()},15)
+        inside(page,bar("SEARCH RESULTS"),24)
+        val notice=panel()
+        if(searching) {
+            val line=hbox()
+            line.addView(ProgressBar(this),LinearLayout.LayoutParams(d(32),d(32)))
+            val label=text(searchProgress,13f,white)
+            progressLabel=label
+            line.addView(label,LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(12)})
+            notice.addView(line)
+            inside(notice,text("Only matching video links will be shown.",12f,muted),9)
+        } else {
+            progressLabel=null
+            notice.addView(text(searchProgress,13f,if(searchResults.isEmpty())muted else green))
+            if(lastSearchQuery.isNotBlank())
+                inside(notice,text("Search: "+lastSearchQuery,12f,muted),7)
+        }
+        inside(page,notice,10)
+        if(searchResults.isNotEmpty()) {
+            inside(page,text(searchResults.size.toString()+" relevant adult video matches",12f,secondary,true),16)
+            for(hit in searchResults) {
+                val result=panel()
+                result.addView(text(hit.title,15f,white,true))
+                inside(result,text(hit.origin+"   •   "+hit.type,11f,secondary,true),7)
+                inside(result,text(hit.url,11f,muted),7)
+                inside(result,text(hit.evidence+". Download compatibility is not yet verified.",11f,muted),10)
+                val actions=hbox()
+                actions.addView(button("DOWNLOAD",true){enqueue(hit.url,hit.title)},
+                    LinearLayout.LayoutParams(0,-2,1f))
+                actions.addView(button("VIEW SOURCE",false){
+                    runCatching{startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(hit.url)))}
+                        .onFailure{toast("Cannot open this video page")}
+                },LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(8)})
+                inside(result,actions,13)
+                inside(page,result,10)
+            }
+        } else if(!searching&&lastSearchQuery.isNotBlank()) {
+            inside(page,emptyState("No matching adult videos",
+                "No indexed video page passed every keyword and adult-content check. Search sites may also block automated discovery."),12)
+        } else if(!searching) {
+            inside(page,emptyState("Search by video content",
+                "Enter a specific performer, title or set of keywords. Irrelevant webpages are excluded."),12)
+        }
+        page.addView(space(24))
+    }
+
+    private fun startKeywordSearch(query:String){
+        val generation=++searchGeneration
+        lastSearchQuery=query
+        searchResults=emptyList()
+        searching=true
+        searchProgress="Searching adult video indexes…"
+        renderCurrent()
+        io.execute {
+            val result=runCatching {
+                VideoSearch.search(query,30) { message->
+                    runOnUiThread {
+                        if(searchGeneration==generation) {
+                            searchProgress=message
+                            progressLabel?.text=message
                         }
                     }
                 }
             }
-        },10)
-        inside(page,bar("RESULTS"),22)
-        inside(page,results,9)
+            runOnUiThread {
+                if(generation!=searchGeneration)return@runOnUiThread
+                searching=false
+                searchResults=result.getOrDefault(emptyList())
+                searchProgress=if(result.isFailure)
+                    "Search failed: "+(result.exceptionOrNull()?.message?.take(130)?:"network unavailable")
+                    else if(searchResults.isEmpty())
+                    "No relevant adult video results found. Unmatched pages were excluded."
+                    else "Only adult video pages matching all keywords are shown."
+                if(screen=="search")renderCurrent()
+            }
+        }
     }
+
     private fun enqueue(url:String,title:String){
         if(queueDb.addVideo(url,title)){
             ensureNotificationAccess()
