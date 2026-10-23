@@ -24,16 +24,20 @@ object WebDiscovery {
             uri.host != "localhost" && !uri.host.startsWith("127.") && !uri.host.startsWith("192.168.") &&
             !uri.host.startsWith("10.") && !uri.host.startsWith("172.16.")
     } catch (_: Exception) { false }
-    fun normalize(address: String): String? = try {
-        val u=URI(address.trim())
-        if(!isUrl(address)) throw IllegalArgumentException("Unsupported address")
-        val host=u.host.lowercase().removePrefix("www.")
-        val query=u.rawQuery?.split('&')?.filterNot {
-            it.startsWith("utm_") || it.startsWith("fbclid=") || it.startsWith("gclid=")
-        }?.joinToString("&")?.takeIf { it.isNotEmpty() }
-        URI("https", u.userInfo, host, if(u.port == 443 || u.port == 80) -1 else u.port,
-            u.path.ifBlank { "/" }, query, null).toASCIIString()
-    } catch (_: Exception) { null }
+    /** Preserve the original HTTPS origin and hostname. Some sites reject stripped www
+     *  or redirected hosts with 502/403, even when the resulting path is the same. */
+    fun normalize(address:String):String?=try {
+        val uri=URI(address.trim())
+        if(!isUrl(address))null
+        else {
+            val cleanQuery=uri.rawQuery?.split('&')?.filterNot {
+                it.startsWith("utm_",true)||it.startsWith("fbclid=",true)||
+                    it.startsWith("gclid=",true)
+            }?.joinToString("&")?.takeIf{it.isNotBlank()}
+            URI(uri.scheme.lowercase(),uri.rawAuthority,
+                uri.rawPath.ifEmpty{"/"},cleanQuery,null).toASCIIString()
+        }
+    } catch(_:Exception){null}
     fun isVideoPage(url: String): Boolean {
         return mediaTypes.containsMatchIn(url) || videoPages.any { it.containsMatchIn(url) } ||
                url.contains("viewkey=",true)
@@ -80,38 +84,9 @@ object WebDiscovery {
         val first=rx.find(content)?.value?.replace("\\u0026","&")?.replace("\\/","/")
         return first?.takeIf { isUrl(it) }
     }
-    fun search(query: String, limit: Int=15): List<VideoHit> {
-        val q=query.trim().take(180)
-        if(q.isBlank()) return emptyList()
-        if(isUrl(q)) return listOf(VideoHit(q,q))
-        val queries=listOf(
-            "https://www.google.com/search?q="+URLEncoder.encode(q, "UTF-8")+"&num=30",
-            "https://www.bing.com/search?q="+URLEncoder.encode(q,"UTF-8")
-        )
-        val out=linkedMapOf<String,VideoHit>()
-        for(url in queries) {
-            try {
-                val document=open(url)
-                val anchors=document.select("a[href]")
-                for(a in anchors) {
-                    var link=a.attr("abs:href")
-                    val candidate=runCatching { URI(link) }.getOrNull() ?: continue
-                    if(candidate.host?.contains("google.")==true && candidate.path=="/url") {
-                        link=candidate.rawQuery?.split('&')?.firstOrNull { it.startsWith("q=") }?.substringAfter("q=") ?: link
-                        link=java.net.URLDecoder.decode(link,"UTF-8")
-                    }
-                    val n=normalize(link) ?: continue
-                    val domain=URI(n).host
-                    if(listOf("google.com","bing.com","youtube.com/redirect","duckduckgo.com").any { domain.endsWith(it) }) continue
-                    if(!isVideoPage(n)) continue
-                    out.putIfAbsent(n, VideoHit(a.text().ifBlank { "Found video" }.take(180), n))
-                    if(out.size >= limit) return out.values.toList()
-                }
-            } catch (_: Exception) { }
-            if(out.isNotEmpty()) break
-        }
-        return out.values.take(limit)
-    }
+    fun search(query: String, limit: Int=15): List<VideoHit> =
+        VideoSearch.search(query,limit).filter { it.type.contains("video page") }
+            .map { VideoHit(it.title,it.url) }
     fun discover(watch: Watch): List<VideoHit> =
         if(watch.address.startsWith("search:")) search(watch.address.removePrefix("search:"),15)
         else findOnPage(watch.address, 15)
