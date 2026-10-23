@@ -58,25 +58,17 @@ object VideoSearch {
                 url,e.name)
         }
     }
-    private fun firstPartySearch(query:String):List<Hit> {
-        val encoded=encode(query)
-        val pages=listOf(
-            "XVideos" to "https://www.xvideos.com/?k="+encoded,
-            "Pornhub" to "https://www.pornhub.com/video/search?search="+encoded,
-            "Eporner" to "https://www.eporner.com/search/"+encoded+"/"
-        )
+    private fun firstPartySearch(label:String,url:String):List<Hit> {
+        val page=open(url)
         val results=ArrayList<Hit>()
-        for((label,url) in pages) {
-            val page=runCatching{open(url)}.getOrNull()?:continue
-            for(a in page.select("a[href]").take(350)) {
-                val target=link(a.attr("href"),page.location())?:continue
-                if(!SearchRelevance.isVideoUrl(target))continue
-                val title=a.attr("title").ifBlank{
-                    a.selectFirst("img[alt]")?.attr("alt").orEmpty()
-                }.ifBlank{a.text()}.take(170)
-                if(title.isNotBlank())results.add(Hit(title,"",target,label+" site search"))
-                if(results.size>=44)break
-            }
+        for(a in page.select("a[href]").take(350)) {
+            val target=link(a.attr("href"),page.location())?:continue
+            if(!SearchRelevance.isVideoUrl(target))continue
+            val title=a.attr("title").ifBlank {
+                a.selectFirst("img[alt]")?.attr("alt").orEmpty()
+            }.ifBlank{a.text()}.take(170)
+            if(title.length>=3)results.add(Hit(title,"",target,label+" site search"))
+            if(results.size>=35)break
         }
         return results
     }
@@ -136,32 +128,54 @@ object VideoSearch {
             SearchRelevance.requestedTerms(phrase).isEmpty())return emptyList()
         val found=linkedMapOf<String,DiscoveryMatch>()
         val examined=hashSetOf<String>()
+        var checkedUnusual=0
         fun collect(items:List<Hit>) {
             for(item in items) {
                 val url=WebDiscovery.normalize(item.link)?:continue
                 if(!examined.add(url))continue
+                if(!SearchRelevance.adultHost(url)) {
+                    if(checkedUnusual>=6)continue
+                    checkedUnusual++
+                }
                 val match=matched(phrase,item)?:continue
                 val key=url.removePrefix("https://www.").lowercase(Locale.ROOT)
                 val previous=found[key]
                 if(previous==null||match.score>previous.score)found[key]=match
             }
         }
-        for(engine in engines) {
-            onProgress?.invoke("Searching "+engine.name+"…")
-            collect(runCatching{searchEngine(engine,phrase+" porn full video")}
-                .getOrDefault(emptyList()))
-            if(found.size>=limit)break
+        // Parallelize search providers so a blocked index does not stall the whole screen.
+        // Threads are short-lived and no site is queried more than once per search.
+        val executor=java.util.concurrent.Executors.newFixedThreadPool(6)
+        val completion=java.util.concurrent.ExecutorCompletionService<Pair<String,List<Hit>>>(executor)
+        val q=phrase+" porn full video"
+        val encoded=encode(phrase)
+        val jobs=ArrayList<Pair<String,()->List<Hit>>>()
+        engines.forEach{engine->
+            jobs.add(engine.name to {searchEngine(engine,q)})
         }
-        if(found.size<limit) {
-            onProgress?.invoke("Searching video websites…")
-            collect(firstPartySearch(phrase))
+        jobs.add("XVideos" to {firstPartySearch("XVideos","https://www.xvideos.com/?k="+encoded)})
+        jobs.add("Pornhub" to {firstPartySearch("Pornhub","https://www.pornhub.com/video/search?search="+encoded)})
+        jobs.add("Eporner" to {firstPartySearch("Eporner","https://www.eporner.com/search/"+encoded+"/")})
+        for((name,fetch) in jobs) {
+            completion.submit(java.util.concurrent.Callable {
+                name to runCatching {fetch()}.getOrDefault(emptyList())
+            })
         }
-        if(found.isEmpty()) {
-            for(engine in engines.take(2)) {
-                onProgress?.invoke("Checking obscure sources through "+engine.name+"…")
-                collect(runCatching{searchEngine(engine,"\""+phrase+"\" adult video")}
-                    .getOrDefault(emptyList()))
+        onProgress?.invoke("Searching adult video sites and wider web indexes…")
+        val deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(26)
+        try {
+            for(i in jobs.indices) {
+                val remaining=deadline-System.nanoTime()
+                if(remaining<=0)break
+                val future=completion.poll(remaining,java.util.concurrent.TimeUnit.NANOSECONDS)
+                    ?:break
+                val result=runCatching{future.get()}.getOrNull()?:continue
+                onProgress?.invoke("Checking "+result.first+" results for keyword matches…")
+                collect(result.second)
+                if(found.size>=limit)break
             }
+        } finally {
+            executor.shutdownNow()
         }
         return found.values.sortedWith(compareByDescending<DiscoveryMatch>{it.score}
             .thenBy{it.origin}).take(limit.coerceIn(1,40))
