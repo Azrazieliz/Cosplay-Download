@@ -24,9 +24,9 @@ object SearchRelevance {
     private val filler=setOf("the","a","an","and","or","with","of","in","on","for","to","is")
     private val adultWords=Regex("""\b(porn|porno|xxx|nsfw|hardcore|hentai|erotic|uncensored|explicit|adult\s*video|sex\s*video|onlyfans|manyvids)\b""",RegexOption.IGNORE_CASE)
     private val mediaExt=Regex("""\.(mp4|m3u8|webm|mov|mpd)([?#]|$)""",RegexOption.IGNORE_CASE)
-    private val videoRoute=Regex("""(/(video|videos|watch|clip|clips|scene|scenes|embed|player|shorts|reel|reels|v)/[^/?#]+|view_video\.php\?[^#]*viewkey=|/watch\?v=[\w-]+|youtu\.be/[\w-]+|/video[-_]\d+)""",RegexOption.IGNORE_CASE)
+    private val videoRoute=Regex("""(/(video|videos|watch|clip|clips|scene|scenes|embed|player|shorts|reel|reels|v)/[^/?#]+|view_video\.php\?[^#]*viewkey=|/watch\?v=[\w-]+|youtu\.be/[\w-]+|/video[-_.]?\w+|/hd-porn/[^/?#]+|/\d{5,}(?:/|$))""",RegexOption.IGNORE_CASE)
     private val urlNoise=setOf("google.com","bing.com","duckduckgo.com","yahoo.com","pinterest.com",
-        "reddit.com","facebook.com","twitter.com","instagram.com","tiktok.com")
+        "facebook.com","twitter.com","instagram.com")
     fun canonical(s:String):String=Normalizer.normalize(s.lowercase(Locale.ROOT),Normalizer.Form.NFKD)
         .replace(Regex("""\p{Mn}+"""),"")
         .replace(Regex("""[^a-z0-9]+""")," ").trim().replace(Regex("""\s+""")," ")
