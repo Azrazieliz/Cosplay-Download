@@ -165,7 +165,7 @@ object VideoSearch {
         }
         // Parallelize search providers so a blocked index does not stall the whole screen.
         // Threads are short-lived and no site is queried more than once per search.
-        val executor=java.util.concurrent.Executors.newFixedThreadPool(6)
+        val executor=java.util.concurrent.Executors.newFixedThreadPool(8)
         val completion=java.util.concurrent.ExecutorCompletionService<Batch>(executor)
         val sourceOutcomes=ArrayList<String>()
         var rawCandidates=0
@@ -178,6 +178,11 @@ object VideoSearch {
         jobs.add("XVideos" to {firstPartySearch("XVideos","https://www.xvideos.com/?k="+encoded)})
         jobs.add("Pornhub" to {firstPartySearch("Pornhub","https://www.pornhub.com/video/search?search="+encoded)})
         jobs.add("Eporner" to {firstPartySearch("Eporner","https://www.eporner.com/search/"+encoded+"/")})
+        jobs.add("XNXX" to {firstPartySearch("XNXX","https://www.xnxx.com/search/"+encoded)})
+        jobs.add("xHamster" to {firstPartySearch("xHamster","https://xhamster.com/search/"+encoded)})
+        jobs.add("SpankBang" to {firstPartySearch("SpankBang","https://spankbang.com/s/"+encoded+"/")})
+        jobs.add("RedTube" to {firstPartySearch("RedTube","https://www.redtube.com/?search="+encoded)})
+        jobs.add("YouPorn" to {firstPartySearch("YouPorn","https://www.youporn.com/search/?query="+encoded)})
         for((name,fetch) in jobs) {
             completion.submit(java.util.concurrent.Callable {
                 try { Batch(name,fetch(),null) }
