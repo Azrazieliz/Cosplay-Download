@@ -114,6 +114,11 @@ class MainActivity : Activity() {
         box.addView(row);return box
     }
     private fun toast(s:String)=Toast.makeText(this,s,Toast.LENGTH_SHORT).show()
+    private fun ensureNotificationAccess(){
+        if(Build.VERSION.SDK_INT>=33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),105)
+    }
 
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
@@ -121,9 +126,6 @@ class MainActivity : Activity() {
         window.decorView.systemUiVisibility=0
         queueDb=VideoDb(this);queueDb.seed();performerDb=PerformerDb(this)
         Scheduling.ensure(this)
-        if(Build.VERSION.SDK_INT>=33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
-            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),105)
         layout=vbox().apply{setBackgroundColor(backdrop)}
         setContentView(layout)
         makeShell()
@@ -222,6 +224,7 @@ class MainActivity : Activity() {
         box.addView(toggle)
         box.addView(text("Android checks monitored models and pages periodically. Exact timing depends on battery and system scheduling.",12f,muted))
         inside(box,button("CHECK FOR NEW VIDEOS",false){
+            ensureNotificationAccess()
             val started=VideoEngine.launch(this,true)
             toast(if(started)"Scan requested" else "Background start restricted; retry from foreground")
         },15)
@@ -462,6 +465,7 @@ class MainActivity : Activity() {
     }
     private fun enqueue(url:String,title:String){
         if(queueDb.addVideo(url,title)){
+            ensureNotificationAccess()
             val started=VideoEngine.launch(this)
             toast(if(started)"Added to downloads" else "Queued; launch when Android allows background work")
         }else toast("Already in your library or invalid link")
@@ -551,7 +555,7 @@ class MainActivity : Activity() {
                 val saved=if(existing==null) performerDb.add(model,sites,minimum)
                     else performerDb.edit(existing.id,model,sites,minimum)
                 if(saved){
-                    dlg.dismiss();navigate("models")
+                    dlg.dismiss();ensureNotificationAccess();navigate("models")
                 }else toast("This performer already exists, or settings are invalid")
             }
         }
