@@ -124,7 +124,11 @@ object VideoSearch {
             if(verifiedVideo)"Player metadata verified" else "Matched adult video title")
     }
     fun search(query:String,limit:Int=30,onProgress:((String)->Unit)?=null):List<DiscoveryMatch> {
-        val phrase=query.trim().take(160)
+        val requested=query.trim().take(180)
+        val siteConstraint=Regex("""(?:^|\s)site:([a-z0-9.-]+)""",RegexOption.IGNORE_CASE)
+            .find(requested)?.groupValues?.getOrNull(1)?.lowercase(Locale.ROOT)
+        val phrase=requested.replace(Regex("""(?:^|\s)site:[a-z0-9.-]+""",
+            RegexOption.IGNORE_CASE)," ").replace("\"","").trim()
         if(phrase.isBlank()||WebDiscovery.isUrl(phrase)||
             SearchRelevance.requestedTerms(phrase).isEmpty())return emptyList()
         val found=linkedMapOf<String,DiscoveryMatch>()
@@ -133,6 +137,12 @@ object VideoSearch {
         fun collect(items:List<Hit>) {
             for(item in items) {
                 val url=WebDiscovery.normalize(item.link)?:continue
+                if(siteConstraint!=null){
+                    val host=runCatching{URI(url).host.orEmpty().removePrefix("www.").lowercase(Locale.ROOT)}
+                        .getOrDefault("")
+                    val domain=siteConstraint.removePrefix("www.")
+                    if(host!=domain && !host.endsWith("."+domain))continue
+                }
                 if(!examined.add(url))continue
                 if(!SearchRelevance.adultHost(url)) {
                     if(checkedUnusual>=6)continue
@@ -148,7 +158,7 @@ object VideoSearch {
         // Threads are short-lived and no site is queried more than once per search.
         val executor=java.util.concurrent.Executors.newFixedThreadPool(6)
         val completion=java.util.concurrent.ExecutorCompletionService<Pair<String,List<Hit>>>(executor)
-        val q=phrase+" porn full video"
+        val q=(if(siteConstraint==null)"" else "site:"+siteConstraint+" ")+phrase+" porn full video"
         val encoded=encode(phrase)
         val jobs=ArrayList<Pair<String,()->List<Hit>>>()
         engines.forEach{engine->
