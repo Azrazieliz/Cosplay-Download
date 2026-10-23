@@ -33,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var sourceList: LinearLayout
     private lateinit var recoveryCard: LinearLayout
     private lateinit var recoveryText: TextView
+    private lateinit var cloudStatus: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var pollTicks = 0
@@ -76,7 +77,10 @@ class MainActivity : Activity() {
 
             updateRecoveryState()
             pollTicks++
-            if (pollTicks % 5 == 0) renderSources()
+            if (pollTicks % 5 == 0) {
+                renderSources()
+                updateCloudStatus()
+            }
             handler.postDelayed(this, 900L)
         }
     }
@@ -96,6 +100,7 @@ class MainActivity : Activity() {
         GalleryDb(this).use { it.ensureEntities(AdapterRegistry.defaultEntities()) }
         renderSources()
         updateRecoveryState()
+        updateCloudStatus()
         handler.removeCallbacks(poll)
         handler.post(poll)
     }
@@ -267,6 +272,44 @@ class MainActivity : Activity() {
             }
         })
         root.addView(automation, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(10) })
+
+        root.addView(sectionTitle("TERABOX", "One flat cloud folder for every album"))
+        val cloudCard = card().apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        cloudCard.addView(label("Flat cloud archive", 15f, TEXT).apply {
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        })
+        cloudStatus = label("Not configured", 12f, MUTED).apply {
+            setPadding(0, dp(7), 0, dp(12))
+        }
+        cloudCard.addView(cloudStatus)
+        cloudCard.addView(label(
+            "Every image, video and archive uses the SAME TeraBox folder. Unique filenames protect files from different albums. Local Kyora folders are preserved.",
+            11f, MUTED
+        ))
+        val cloudActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        cloudActions.addView(actionButton("Configure", compact = true) {
+            TeraboxSettingsDialog.show(this@MainActivity) { updateCloudStatus() }
+        }, LinearLayout.LayoutParams(0, dp(44), 1f))
+        cloudActions.addView(actionButton("Upload archive", compact = true, primary = true) {
+            if (!TeraboxSettings.enabled(this@MainActivity) ||
+                !TeraboxSettings.isConfigured(this@MainActivity)) {
+                Toast.makeText(this@MainActivity,
+                    "Configure and enable TeraBox first", Toast.LENGTH_LONG).show()
+            } else {
+                startSync(SyncMode.CLOUD)
+            }
+        }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(8) })
+        cloudCard.addView(cloudActions)
+        root.addView(cloudCard, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(10) })
@@ -472,6 +515,19 @@ class MainActivity : Activity() {
         } else {
             recoveryCard.visibility = View.VISIBLE
             recoveryText.text = sourceName(pending.source) + " has an item that could not be resolved automatically."
+        }
+    }
+
+    private fun updateCloudStatus() {
+        if (!::cloudStatus.isInitialized) return
+        cloudStatus.text = when {
+            !TeraboxSettings.isConfigured(this) -> "Not connected · Open Platform credentials required"
+            !TeraboxSettings.enabled(this) -> "Configured · Cloud uploads disabled"
+            else -> {
+                val stats = CloudUploadQueue(this).use { it.summary() }
+                "Enabled · ${stats.uploaded} uploaded · ${stats.pending} pending" +
+                    (stats.lastError?.let { " · Last error: $it" } ?: "")
+            }
         }
     }
 

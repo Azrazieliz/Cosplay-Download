@@ -25,7 +25,7 @@ enum class TransferState(val dbValue: String) {
     PERMANENT_ERROR("permanent_error")
 }
 
-enum class SyncMode { LIVE, BACKFILL }
+enum class SyncMode { LIVE, BACKFILL, CLOUD }
 enum class MediaKind { IMAGE, VIDEO, ARCHIVE }
 
 data class SourceEntity(
