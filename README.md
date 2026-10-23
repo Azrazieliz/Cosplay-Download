@@ -39,3 +39,12 @@ On the authorized Windows machine:
 - Background JobScheduler runs approximately every 15 minutes or later, at Android's discretion; power optimization may defer runs.
 - Android runtime validation has not been performed without an attached device/emulator.
 - The user must have permission to download and store content. No site account is required by the app itself.
+
+## Performer-first full-video watches (v0.2.0)
+
+- Add any performer name in **Performer monitoring**. All 45 preconfigured site candidates are searched by default. A comma-separated list of domains can limit an individual watch, including custom domains outside the catalog.
+- Each automatic check processes up to 4 sites per performer, rotating through all selected domains over successive JobScheduler checks; it does not bombard all sites simultaneously.
+- Each discovered video page is probed with the embedded yt-dlp engine to read its actual duration and metadata. Only results at or above the configured duration threshold (default 10 minutes) with performer-name evidence are queued. Unknown-duration results are deliberately skipped.
+- Discovery sites, extractor status and actual download compatibility are **not equivalent**. Many custom sites or age-gated sites may be blocked or unsupported. The original four default homepages are present but paused to prevent unrelated automatic downloads.
+- The original manual URL, search, queue, storage, cookie and Round Sync workflows remain available.
+- **Phone-first builds**: GitHub Actions workflow `.github/workflows/videoflow-mobile.yml` creates an installable arm64 debug APK as an artifact on branch `videoflow-mobile`. This debug build is separately signed and cannot update a previously installed production-signed v0.1 APK without the matching production key. Keep the original release signing key outside any public repository.
