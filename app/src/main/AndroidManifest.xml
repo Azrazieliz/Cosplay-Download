@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
-    <application android:label="VideoFlow Premium" android:icon="@drawable/ic_videoflow" android:theme="@android:style/Theme.Material.NoActionBar"
+    <application android:label="VideoFlow Discover" android:icon="@drawable/ic_videoflow" android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="false" android:allowBackup="false" android:extractNativeLibs="true">
         <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
