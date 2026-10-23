@@ -29,7 +29,7 @@ def tap_text(label):
 
 adb("install","-r","app/build/outputs/apk/debug/app-debug.apk")
 adb("logcat","-c")
-adb("shell","am","start","-W","-n","com.asterion.videoflow.preview05/com.asterion.videoflow.MainActivity")
+adb("shell","am","start","-W","-n","com.asterion.videoflow.preview06/com.asterion.videoflow.MainActivity")
 time.sleep(4)
 screenshot("ui-home.png")
 tap_text("Models")
@@ -42,7 +42,7 @@ tap_text("Downloads")
 screenshot("ui-downloads.png")
 tap_text("Sources")
 screenshot("ui-sources.png")
-pid=adb("shell","pidof","-s","com.asterion.videoflow.preview05").strip()
+pid=adb("shell","pidof","-s","com.asterion.videoflow.preview06").strip()
 assert pid.isdigit(), "VideoFlow process terminated"
 crashes=adb("logcat","-b","crash","-d")
 Path("crash.log").write_text(crashes)
