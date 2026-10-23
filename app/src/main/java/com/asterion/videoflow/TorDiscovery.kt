@@ -2,7 +2,6 @@ package com.asterion.videoflow
 
 import java.net.URI
 import java.net.URLDecoder
-import java.net.URLEncoder
 import java.util.Locale
 import org.jsoup.nodes.Document
 
@@ -70,20 +69,24 @@ object TorDiscovery {
     fun search(query:String,tor:TorOptions,knownSources:List<String>,
                onProgress:((String)->Unit)?=null):List<DiscoveryMatch>{
         TorAccess.check(tor) // Strictly abort if SOCKS is absent; no clearnet fallback.
-        val collected=linkedMapOf<String,Candidate>()
-        onProgress?.invoke("Searching Ahmia's Tor index…")
-        // Ahmia implements its own safety filtering, which we do not bypass.
-        val index="https://ahmia.fi/search/?q="+URLEncoder.encode(query,"UTF-8")
-        val indexPage=runCatching{TorAccess.fetch(index,tor)}.getOrNull()
-        if(indexPage!=null) for(c in candidates(indexPage,index,query,"Ahmia",8)){
-            collected.putIfAbsent(c.url,c)
+        // Ahmia documents that it filters sexually related searches. Do not rely on
+        // an index that cannot return the user's requested media, or bypass its filters.
+        val sources=knownSources.filter{TorAccess.isV3Onion(it)}.distinct()
+        require(sources.isNotEmpty()){
+            "Tor is reachable, but no onion video pages are configured. Ahmia filters adult searches. Add a known .onion video site in Sites."
         }
-        onProgress?.invoke("Checking your configured onion sources…")
-        for(link in knownSources.filter{TorAccess.isV3Onion(it)}.distinct().take(5)) {
+        val collected=linkedMapOf<String,Candidate>()
+        onProgress?.invoke("Searching "+sources.size+" saved onion sources through Tor…")
+        var reachable=0
+        for(link in sources.take(12)) {
             val page=runCatching{TorAccess.fetch(link,tor)}.getOrNull()?:continue
-            for(c in candidates(page,link,query,"Saved onion source",8))
+            reachable++
+            for(c in candidates(page,link,query,"Saved onion source",12))
                 collected.putIfAbsent(c.url,c)
         }
+        if(reachable==0)throw IllegalStateException(
+            "No configured onion sources responded through Orbot. Check their addresses in Tor Browser."
+        )
         val output=ArrayList<DiscoveryMatch>()
         for(candidate in collected.values.take(10)) {
             onProgress?.invoke("Verifying onion video pages through Tor…")
