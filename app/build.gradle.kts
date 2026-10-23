@@ -11,7 +11,7 @@ android {
         targetSdk = 35
         versionCode = 3
         versionName = "0.3.0"
-        ndk { abiFilters += listOf("arm64-v8a") }
+        ndk { abiFilters += if (project.findProperty("uiSmoke") == "true") listOf("x86_64") else listOf("arm64-v8a") }
     }
     signingConfigs {
         create("videoRelease") {
