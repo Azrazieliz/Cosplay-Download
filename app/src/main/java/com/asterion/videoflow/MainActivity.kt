@@ -647,11 +647,20 @@ class MainActivity : Activity() {
                 toast("Cloud settings saved")
             }.show()
     }
+    @Deprecated("Back navigation compatibility")
+    override fun onBackPressed() {
+        if(screen!="home") navigate("home") else super.onBackPressed()
+    }
     override fun onResume(){
         super.onResume();foreground=true
+        main.removeCallbacks(pulse)
         main.postDelayed(pulse,5000)
     }
-    override fun onPause(){foreground=false;super.onPause()}
+    override fun onPause(){
+        foreground=false
+        main.removeCallbacks(pulse)
+        super.onPause()
+    }
     private val pulse=object:Runnable{
         override fun run(){
             if(foreground){
