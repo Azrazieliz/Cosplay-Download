@@ -91,7 +91,7 @@ object VideoSearch {
     private fun matched(query:String,hit:Hit):DiscoveryMatch? {
         val uri=WebDiscovery.normalize(hit.link)?:return null
         val host=runCatching{URI(uri).host.orEmpty()}.getOrDefault("")
-        val tokens=SearchRelevance.requestedTerms(query)
+        val tokens=SearchRelevance.contentTerms(query)
         if(tokens.isEmpty())return null
         // Cheap relevance gate prevents unrelated pages from being fetched or displayed.
         val organic=SearchRelevance.canonical(hit.title+" "+hit.snippet).split(' ').toSet()
@@ -145,7 +145,7 @@ object VideoSearch {
                 }
                 if(!examined.add(url))continue
                 if(!SearchRelevance.adultHost(url)) {
-                    val terms=SearchRelevance.requestedTerms(phrase)
+                    val terms=SearchRelevance.contentTerms(phrase)
                     val words=SearchRelevance.canonical(item.title+" "+item.snippet)
                         .split(' ').toSet()
                     // Spend metadata checks only on results that already mention the
