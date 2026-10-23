@@ -36,7 +36,7 @@ object WebDiscovery {
             }?.joinToString("&")?.takeIf{it.isNotBlank()}
             buildString {
                 append(uri.scheme.lowercase()).append("://").append(uri.rawAuthority)
-                append(uri.rawPath.ifNullOrBlank{"/"})
+                append(uri.rawPath.orEmpty().ifBlank{"/"})
                 if(!cleanQuery.isNullOrBlank())append("?").append(cleanQuery)
             }
         }
