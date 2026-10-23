@@ -88,8 +88,7 @@ object WebDiscovery {
         return first?.takeIf { isUrl(it) }
     }
     fun search(query: String, limit: Int=15): List<VideoHit> =
-        VideoSearch.search(query,limit).filter { it.type.contains("video page") }
-            .map { VideoHit(it.title,it.url) }
+        VideoSearch.search(query,limit).map { VideoHit(it.title,it.url) }
     fun discover(watch: Watch): List<VideoHit> =
         if(watch.address.startsWith("search:")) search(watch.address.removePrefix("search:"),15)
         else findOnPage(watch.address, 15)
