@@ -105,27 +105,49 @@ object VideoEngine {
         val template=File(parent,"%(title).160s [%(id)s].%(ext)s").absolutePath
         val prefs=context.getSharedPreferences("video_options",Context.MODE_PRIVATE)
         val cookie=File(context.filesDir,"cookies.txt")
-        fun request(link: String) = YtDlpRequest(link).setOutputTemplate(template)
-            .addOption("--no-playlist").addOption("--continue").addOption("--no-overwrites")
-            .addOption("--retries","5").addOption("--fragment-retries","5")
-            .addOption("--socket-timeout","25")
-            .addOption("-f",prefs.getString("quality","best[ext=mp4]/best") ?: "best[ext=mp4]/best")
-            .apply { if(cookie.isFile && cookie.length()>0) addOption("--cookies",cookie.absolutePath) }
-        fun execute(link: String) {
-            val res=YtDlp.execute(request(link)) { p, _, _ ->
-                val percent=p.toInt().coerceIn(0,100)
+        fun request(link:String, referer:String?=null)=
+            YtDlpRequest(link).setOutputTemplate(template)
+                .addOption("--no-playlist").addOption("--continue")
+                .addOption("--no-overwrites").addOption("--retries","2")
+                .addOption("--fragment-retries","3")
+                .addOption("--retry-sleep","http:2")
+                .addOption("--socket-timeout","20")
+                .addOption("--user-agent",
+                    "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36")
+                .addOption("-f",prefs.getString("quality","best[ext=mp4]/best")
+                    ?: "best[ext=mp4]/best")
+                .apply {
+                    if(!referer.isNullOrBlank())addOption("--referer",referer)
+                    if(cookie.isFile&&cookie.length()>0)addOption("--cookies",cookie.absolutePath)
+                }
+        fun execute(link:String,referer:String?=null) {
+            val response=YtDlp.execute(request(link,referer)){progress,_,_->
+                val percent=progress.toInt().coerceIn(0,100)
                 db.progress(item.id,percent)
                 if(percent%5==0) status(percent)
             }
-            if(!res.isSuccess) throw IllegalStateException("Extractor finished with code ${res.exitCode}")
+            if(!response.isSuccess)error("Video extractor failed with exit code ${response.exitCode}")
         }
-        try {
-            execute(item.url)
-        } catch(initial:Exception) {
-            val direct=runCatching { WebDiscovery.directMedia(item.url) }.getOrNull()
-            if(direct.isNullOrBlank() || direct==item.url) throw initial
-            execute(direct)
+        // Historical builds altered original hostnames. Try the precise URL first.
+        val variants=listOf(item.url)+SourceDiagnostics.alternateHosts(item.url)
+        var last:Throwable?=null
+        var downloaded=false
+        for(candidate in variants.distinct()) {
+            try {
+                execute(candidate)
+                downloaded=true
+                break
+            } catch(t:Exception) {last=t}
+            val media=runCatching{WebDiscovery.directMedia(candidate)}.getOrNull()
+            if(!media.isNullOrBlank()&&media!=candidate) {
+                try {
+                    execute(media,candidate)
+                    downloaded=true
+                    break
+                } catch(t:Exception) {last=t}
+            }
         }
+        if(!downloaded)throw (last?:IllegalStateException("No video extractor succeeded"))
         val file=parent.listFiles()?.filter { it.isFile && it.length()>0 &&
             it.extension.lowercase() in setOf("mp4","mkv","webm","mov","ts") }
             ?.maxByOrNull { it.length() } ?: error("No completed playable video found")
