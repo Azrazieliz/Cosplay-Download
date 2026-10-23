@@ -47,6 +47,7 @@ class MainActivity : Activity() {
     private var searching=false
     private var searchGeneration=0
     private var searchProgress="Enter specific keywords to discover matching adult videos."
+    private var torSearchNote:String?=null
     private var progressLabel:TextView?=null
     private val io=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
@@ -483,6 +484,10 @@ class MainActivity : Activity() {
         torBox.addView(torToggle)
         inside(torBox,text("Tor searches use Orbot's local proxy. Public search indexes still use the normal connection. Onion results require verified video metadata.",12f,muted),7)
         inside(torBox,button("TOR CONNECTION SETTINGS",false){torSettings()},11)
+        inside(torBox,button("ADD A KNOWN .ONION SOURCE",false){
+            navigate("sources")
+            addSource()
+        },8)
         inside(page,torBox,13)
         inside(page,text("Sources: adult video sites and broader web indexes. Mainstream sites appear only when the video itself has adult-content evidence.",12f,muted),12)
         inside(page,button("DOWNLOAD FROM A URL INSTEAD",false){addUrl()},15)
@@ -503,6 +508,9 @@ class MainActivity : Activity() {
                 inside(notice,text("Search: "+lastSearchQuery,12f,muted),7)
         }
         inside(page,notice,10)
+        torSearchNote?.let {note->
+            inside(page,text(note,12f,amber),9)
+        }
         if(searchResults.isNotEmpty()) {
             inside(page,text(searchResults.size.toString()+" relevant adult video matches",12f,secondary,true),16)
             for(hit in searchResults) {
@@ -542,6 +550,7 @@ class MainActivity : Activity() {
         searchResults=emptyList()
         searching=true
         searchProgress="Searching adult video indexes…"
+        torSearchNote=null
         renderCurrent()
         val tor=TorAccess.settings(this)
         val onionSources=queueDb.listWatches().map{it.address}
@@ -557,20 +566,26 @@ class MainActivity : Activity() {
                     }
                 }
                 val publicResults=VideoSearch.search(query,30,progress)
+                var torMessage:String?=null
                 val onionResults=if(tor.enabled) {
                     try {
-                        TorDiscovery.search(query,tor,onionSources,progress)
+                        val matches=TorDiscovery.search(query,tor,onionSources,progress)
+                        if(matches.isEmpty())torMessage=
+                            "Tor search found no verified onion video. Indexes may filter results; add a known onion page under Sites."
+                        matches
                     } catch(t:Exception) {
-                        progress("Tor unavailable: "+(t.message?: "Proxy connection failed"))
+                        torMessage="Tor unavailable: "+(t.message?: "Proxy connection failed")
                         emptyList()
                     }
                 } else emptyList()
-                (publicResults+onionResults).distinctBy{it.url}.sortedByDescending{it.score}.take(35)
+                (publicResults+onionResults).distinctBy{it.url}
+                    .sortedByDescending{it.score}.take(35) to torMessage
             }
             runOnUiThread {
                 if(generation!=searchGeneration)return@runOnUiThread
                 searching=false
-                searchResults=result.getOrDefault(emptyList())
+                searchResults=result.getOrNull()?.first ?: emptyList()
+                torSearchNote=result.getOrNull()?.second
                 searchProgress=if(result.isFailure)
                     "Search failed: "+(result.exceptionOrNull()?.message?.take(130)?:"network unavailable")
                     else if(searchResults.isEmpty())
