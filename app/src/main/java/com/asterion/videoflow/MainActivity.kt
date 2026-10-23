@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     private lateinit var tabs:LinearLayout
     private var screen="home"
     private var downloadFilter="All"
+    private val expandedErrors=mutableSetOf<Long>()
     private var siteExpanded=false
     private val io=Executors.newSingleThreadExecutor()
     private val main=Handler(Looper.getMainLooper())
@@ -198,7 +199,7 @@ class MainActivity : Activity() {
         }
         hero.addView(text("YOUR LIBRARY, ON AUTOPILOT",11f,secondary,true).apply{letterSpacing=0.12f})
         hero.addView(space(11))
-        hero.addView(text("Find the videos.\nKeep the collection.",27f,white,true))
+        hero.addView(text("Discover more.\nDownload with control.",27f,white,true))
         hero.addView(space(8))
         hero.addView(text("Follow performers or add a video link. VideoFlow takes care of discovery and downloads.",13f,Color.rgb(208,217,241)))
         inside(hero,button("+  FOLLOW A PERFORMER"){performerDialog()},17)
@@ -211,8 +212,8 @@ class MainActivity : Activity() {
         ).forEach { metrics.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply{rightMargin=d(7)}) }
         inside(page,metrics,14)
         inside(page,bar("QUICK ACTIONS"),26)
-        inside(page,clickableCard("Download from link","Paste a video URL and save it","↘",primary){addUrl()},12)
-        inside(page,clickableCard("Find a video","Search and choose a matching result","⌕",secondary){navigate("search")},10)
+        inside(page,clickableCard("PASTE VIDEO URL","Directly download one video from its exact link","↘",primary){addUrl()},12)
+        inside(page,clickableCard("DISCOVER VIDEOS","Search titles, keywords and uncommon websites","⌕",secondary){navigate("search")},10)
         inside(page,bar("AUTOMATION"),25)
         val box=panel()
         val prefs=getSharedPreferences("video_options",MODE_PRIVATE)
@@ -338,7 +339,16 @@ class MainActivity : Activity() {
             inside(card,bar,12)
             inside(card,text(v.progress.toString()+"% downloaded",11f,muted),4)
         }
-        if(v.status=="error")inside(card,text(v.error?.take(190) ?: "The source could not be downloaded.",12f,red),10)
+        if(v.status=="error") {
+            inside(card,text(SourceDiagnostics.summary(v.error),12f,red),10)
+            inside(card,text(SourceDiagnostics.retryAdvice(v.error),11f,muted),7)
+            val isExpanded=expandedErrors.contains(v.id)
+            inside(card,button(if(isExpanded)"HIDE TECHNICAL DETAILS" else "VIEW TECHNICAL DETAILS",false) {
+                if(isExpanded)expandedErrors.remove(v.id) else expandedErrors.add(v.id)
+                renderCurrent()
+            },9)
+            if(isExpanded)inside(card,text(v.error.orEmpty().take(700),11f,muted),8)
+        }
         if(!compact){
             val actions=hbox()
             val action=when(v.status){
@@ -434,28 +444,44 @@ class MainActivity : Activity() {
         inside(this,text(description,13f,muted).apply{gravity=Gravity.CENTER},6)
     }
     private fun searchPage(){
-        inside(page,heading("Find a video","Search for a title or paste a URL to download it."))
-        val search=input("Search title, performer or video URL")
+        inside(page,heading("Discover videos","Search the wider web, including obscure sites. Results are candidates until tested."))
+        inside(page,button("OR PASTE A DIRECT LINK",false){addUrl()},12)
+        val search=input("Search keywords, video titles or performer names")
         inside(page,search,18)
         val results=vbox()
         inside(page,button("SEARCH VIDEOS"){
             val query=search.text.toString().trim()
             if(query.isBlank()){toast("Enter a search or URL");return@button}
-            if(WebDiscovery.isUrl(query)){enqueue(query,query);return@button}
+            if(WebDiscovery.isUrl(query)){
+                toast("That is a URL. Use Home → PASTE VIDEO URL.")
+                return@button
+            }
             results.removeAllViews()
-            results.addView(text("Searching compatible sites…",13f,muted))
+            results.addView(text("Searching multiple web indexes for video pages…",13f,muted))
             io.execute {
-                val list=runCatching{WebDiscovery.search(query,20)}.getOrDefault(emptyList())
+                val list=runCatching{VideoSearch.search(query,40)}.getOrDefault(emptyList())
                 runOnUiThread{
                     results.removeAllViews()
-                    if(list.isEmpty())results.addView(emptyState("No matching links found",
-                        "Try a different search or paste the video page URL."))
-                    else list.forEach{hit->
-                        val box=panel()
-                        box.addView(text(hit.title,14f,white,true))
-                        inside(box,text(hit.url,11f,muted),5)
-                        inside(box,button("DOWNLOAD VIDEO",false){enqueue(hit.url,hit.title)},10)
-                        inside(results,box,9)
+                    if(list.isEmpty())results.addView(emptyState("No matching pages found",
+                        "The search engines may block automated requests. Try different keywords."))
+                    else {
+                        results.addView(text(list.size.toString()+" CANDIDATE VIDEOS",12f,secondary,true))
+                        results.addView(space(8))
+                        list.forEach { hit ->
+                            val box=panel()
+                            box.addView(text(hit.title,15f,white,true))
+                            inside(box,text(hit.origin+"  •  "+hit.type,12f,secondary),5)
+                            inside(box,text(hit.url,11f,muted),6)
+                            inside(box,text("Candidate result — video availability is not yet verified.",11f,muted),8)
+                            val actions=hbox()
+                            actions.addView(button("DOWNLOAD",false){enqueue(hit.url,hit.title)},
+                                LinearLayout.LayoutParams(0,-2,1f))
+                            actions.addView(button("OPEN PAGE",false){
+                                startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(hit.url)))
+                            },LinearLayout.LayoutParams(0,-2,1f).apply{leftMargin=d(8)})
+                            inside(box,actions,12)
+                            inside(results,box,9)
+                        }
                     }
                 }
             }
@@ -476,7 +502,7 @@ class MainActivity : Activity() {
         val box=vbox().apply{pad(this,17,12)}
         box.addView(text("Paste a video page or direct file link.",13f,muted))
         inside(box,edit,13)
-        AlertDialog.Builder(this).setTitle("Download a video").setView(box)
+        AlertDialog.Builder(this).setTitle("Direct URL download").setView(box)
             .setNegativeButton("Cancel",null)
             .setPositiveButton("ADD TO DOWNLOADS"){_,_->
                 val url=edit.text.toString().trim()
