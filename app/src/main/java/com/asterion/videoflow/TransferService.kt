@@ -57,7 +57,7 @@ object VideoEngine {
                 for(watch in db.listWatches().filter { it.enabled }) {
                     try {
                         onStatus("Scanning ${watch.label}")
-                        val hits=WebDiscovery.discover(watch)
+                        val hits=WebDiscovery.discover(watch,TorAccess.settings(context))
                         if(hits.isEmpty()) error("No video links found on this page; use a specific feed, profile, or search watch")
                         var added=0
                         for(hit in hits) {
@@ -105,6 +105,9 @@ object VideoEngine {
         val template=File(parent,"%(title).160s [%(id)s].%(ext)s").absolutePath
         val prefs=context.getSharedPreferences("video_options",Context.MODE_PRIVATE)
         val cookie=File(context.filesDir,"cookies.txt")
+        val requiresTor=TorAccess.isOnion(item.url)
+        val tor=TorAccess.settings(context)
+        if(requiresTor)TorAccess.check(tor)
         fun request(link:String, referer:String?=null)=
             YtDlpRequest(link).setOutputTemplate(template)
                 .addOption("--no-playlist").addOption("--continue")
@@ -117,6 +120,10 @@ object VideoEngine {
                 .addOption("-f",prefs.getString("quality","best[ext=mp4]/best")
                     ?: "best[ext=mp4]/best")
                 .apply {
+                    if(requiresTor){
+                        addOption("--proxy",tor.proxyUrl)
+                        addOption("--downloader","native")
+                    }
                     if(!referer.isNullOrBlank())addOption("--referer",referer)
                     if(cookie.isFile&&cookie.length()>0)addOption("--cookies",cookie.absolutePath)
                 }
@@ -138,7 +145,7 @@ object VideoEngine {
                 downloaded=true
                 break
             } catch(t:Exception) {last=t}
-            val media=runCatching{WebDiscovery.directMedia(candidate)}.getOrNull()
+            val media=runCatching{WebDiscovery.directMedia(candidate,tor)}.getOrNull()
             if(!media.isNullOrBlank()&&media!=candidate) {
                 try {
                     execute(media,candidate)
