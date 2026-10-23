@@ -482,7 +482,8 @@ class MainActivity : Activity() {
             }
         }
         torBox.addView(torToggle)
-        inside(torBox,text("Tor searches use Orbot's local proxy. Public search indexes still use the normal connection. Onion results require verified video metadata.",12f,muted),7)
+        inside(torBox,text("Requires Orbot connected in Power User Mode. Tor is separate from regular web search.",12f,muted),7)
+        inside(torBox,text("Ahmia filters adult searches. To find onion videos, add a known onion source under Sites.",12f,amber),7)
         inside(torBox,button("TOR CONNECTION SETTINGS",false){torSettings()},11)
         inside(torBox,button("ADD A KNOWN .ONION SOURCE",false){
             navigate("sources")
@@ -571,7 +572,7 @@ class MainActivity : Activity() {
                     try {
                         val matches=TorDiscovery.search(query,tor,onionSources,progress)
                         if(matches.isEmpty())torMessage=
-                            "Tor search found no verified onion video. Indexes may filter results; add a known onion page under Sites."
+                            "No verified Tor video. Ahmia filters sexual searches; add a known onion site under Sites. Saved onion sources: "+onionSources.size
                         matches
                     } catch(t:Exception) {
                         torMessage="Tor unavailable: "+(t.message?: "Proxy connection failed")
@@ -699,28 +700,54 @@ class MainActivity : Activity() {
     private fun torSettings() {
         val prefs=getSharedPreferences("video_options",MODE_PRIVATE)
         val box=vbox().apply{pad(this,18,10)}
-        box.addView(text("VideoFlow connects to Orbot's local SOCKS proxy. Orbot must already be running. A reachable port is not proof that Tor finished connecting.",13f,muted))
-        val field=input("SOCKS port (usually 9050)",
-            prefs.getInt("tor_socks_port",9050).toString()).apply {
+        box.addView(text("CONNECT TO TOR",12f,secondary,true))
+        inside(box,text("1. Open Orbot and enable Power User Mode in Settings.\n2. Tap Connect in Orbot and confirm it says Connected.\n3. Return here and select TEST TOR CONNECTION.",13f,white),11)
+        inside(box,text("Orbot normally uses SOCKS 9050. Some configurations use another port. This test checks a real Tor circuit—not just an open port.",12f,muted),10)
+        val field=input("Orbot SOCKS port (default 9050)",
+            prefs.getInt("tor_socks_port",9050).toString()).apply{
             inputType=InputType.TYPE_CLASS_NUMBER
         }
-        inside(box,field,12)
-        inside(box,button("TEST LOCAL SOCKS PORT",false) {
-            val port=field.text.toString().toIntOrNull()?:-1
-            toast(if(TorAccess.portReachable(port))
-                "A local proxy is listening. Actual Tor routing not verified."
-                else "Cannot connect. Start Orbot or check its SOCKS port.")
+        inside(box,field,14)
+        val status=text("Not tested. Tor searches require a connected Orbot proxy.",13f,muted)
+        inside(box,status,14)
+        inside(box,button("TEST TOR CONNECTION",true){
+            val port=field.text.toString().toIntOrNull()
+            if(port==null||port !in 1..65535) {
+                status.text="Enter a valid port (1–65535)."
+            } else {
+                status.text="Checking SOCKS ports and Tor circuit…"
+                io.execute {
+                    val report=TorAccess.diagnose(port)
+                    runOnUiThread {
+                        status.text=report.message
+                        status.setTextColor(if(report.verified)green else amber)
+                        if(report.verified && report.detectedPort!=null){
+                            field.setText(report.detectedPort.toString())
+                            prefs.edit().putInt("tor_socks_port",report.detectedPort)
+                                .putBoolean("tor_enabled",true).apply()
+                        }
+                    }
+                }
+            }
         },12)
-        inside(box,text("Direct .onion links will never fall back to your ordinary internet connection. Search indexes may filter queries and not every hidden site is searchable.",12f,muted),14)
-        AlertDialog.Builder(this).setTitle("Tor / Orbot")
+        inside(box,button("OPEN ORBOT",false){
+            val launch=packageManager.getLaunchIntentForPackage("org.torproject.android")
+            if(launch!=null)startActivity(launch)
+            else runCatching{
+                startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://orbot.app/")))
+            }.onFailure{toast("Install Orbot to use Tor sources")}
+        },9)
+        inside(box,text("If the test fails: check Orbot's Power User Mode, SOCKS setting and connected state. Another Android VPN or background restrictions can prevent Tor from starting. The app will never send .onion requests directly.",12f,muted),13)
+        inside(box,text("Adult-related search terms are filtered by Ahmia. Even with Tor connected, broad adult onion discovery will not be complete. Add known onion video pages in Sites.",12f,amber),12)
+        AlertDialog.Builder(this).setTitle("Tor connection setup")
             .setView(ScrollView(this).apply{addView(box)})
-            .setNegativeButton("Cancel",null)
-            .setPositiveButton("SAVE"){_,_->
+            .setNegativeButton("CLOSE",null)
+            .setPositiveButton("SAVE PORT"){_,_->
                 val port=field.text.toString().toIntOrNull()
-                if(port==null||port !in 1..65535)toast("Port must be between 1 and 65535")
+                if(port==null||port !in 1..65535)toast("Invalid SOCKS port")
                 else {
                     prefs.edit().putInt("tor_socks_port",port).apply()
-                    toast("Tor proxy port saved")
+                    toast("SOCKS port saved. Test Tor connection before searching.")
                 }
             }.show()
     }
