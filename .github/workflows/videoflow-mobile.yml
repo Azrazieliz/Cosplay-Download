@@ -23,7 +23,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
-      - name: Search relevance regression tests
+      - name: Direct URL validation regression tests
         run: gradle :app:testDebugUnitTest --no-daemon --console=plain
       - name: Build installable Android APK
         run: gradle :app:assembleDebug --no-daemon --console=plain
