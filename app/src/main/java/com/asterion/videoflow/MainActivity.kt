@@ -25,6 +25,11 @@ class MainActivity: Activity() {
     private val ok=Color.rgb(89,211,166)
     private val bad=Color.rgb(247,126,144)
     private lateinit var db: VideoDb
+    private lateinit var performerDb: PerformerDb
+    private lateinit var performers: LinearLayout
+    private lateinit var performerInput: EditText
+    private lateinit var performerSites: EditText
+    private lateinit var performerLength: EditText
     private lateinit var watches: LinearLayout
     private lateinit var queue: LinearLayout
     private lateinit var stats: TextView
@@ -61,7 +66,9 @@ class MainActivity: Activity() {
     override fun onCreate(savedInstanceState:Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor=bg;window.navigationBarColor=bg
-        db=VideoDb(this);db.seed();Scheduling.ensure(this)
+        db=VideoDb(this);db.seed()
+        performerDb=PerformerDb(this)
+        Scheduling.ensure(this)
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),109)
         render()
@@ -120,6 +127,29 @@ class MainActivity: Activity() {
             action("ROUND SYNC / TERABOX",false){cloudSettings()}
         ))
         base.addView(control);base.addView(gap(20))
+        base.addView(heading("Performer monitoring"));base.addView(gap(9))
+        val watchCard=card()
+        watchCard.addView(txt("All ${AdultSiteCatalog.sites.size} listed sites are included in a new performer watch by default. Sources rotate between checks; only duration-confirmed full videos enter the automatic queue.",12f,muted))
+        watchCard.addView(gap(12))
+        performerInput=input("Performer / model name")
+        performerSites=input("Sites: * for all, or comma-separated domains").apply { setText("*") }
+        performerLength=input("Minimum duration (minutes)").apply {
+            setText("10");inputType=InputType.TYPE_CLASS_NUMBER
+        }
+        watchCard.addView(performerInput);watchCard.addView(gap(8))
+        watchCard.addView(performerSites);watchCard.addView(gap(8))
+        watchCard.addView(performerLength);watchCard.addView(gap(8))
+        watchCard.addView(row(action("+ FOLLOW PERFORMER") {
+            val name=performerInput.text.toString()
+            val selection=performerSites.text.toString()
+            val minutes=performerLength.text.toString().toIntOrNull()?:10
+            if(performerDb.add(name,selection,minutes)) {
+                performerInput.text.clear();refresh()
+            } else toast("Invalid or duplicate performer watch")
+        },action("SUPPORTED SITES",false) {showSites()}))
+        base.addView(watchCard);base.addView(gap(8))
+        performers=column();base.addView(performers)
+        base.addView(gap(20))
         base.addView(heading("Watched sources"));base.addView(gap(10))
         val source=card()
         sourceBox=input("Profile, category, feed URL or search words")
@@ -141,8 +171,38 @@ class MainActivity: Activity() {
         base.addView(txt("Downloads: Files → Downloads/VideoFlow. Source failures are recorded; protected media is not decrypted.",11f,muted))
         refresh()
     }
+    private fun showSites() {
+        val group=AdultSiteCatalog.sites.groupBy { it.extractor }
+        val lines=group.entries.joinToString("\n\n") { (status,items) ->
+            status.uppercase()+"\n"+items.joinToString(", ") { it.label }
+        }
+        val view=ScrollView(this)
+        val label=txt(lines,13f,Color.BLACK)
+        padding(label,18,14);view.addView(label)
+        AlertDialog.Builder(this).setTitle("${AdultSiteCatalog.sites.size} discovery sites")
+            .setMessage("Every site is searchable. Dedicated extractors are not guarantees; unknown-duration clips are excluded from automatic full-video downloads.")
+            .setView(view).setPositiveButton("Close",null).show()
+    }
     private fun refresh(){
-        if(!::queue.isInitialized || !::watches.isInitialized)return
+        if(!::queue.isInitialized || !::watches.isInitialized || !::performers.isInitialized)return
+        performers.removeAllViews()
+        for(w in performerDb.list()) {
+            val c=card()
+            c.addView(row(txt(w.name,15f,textColor,true),action(if(w.enabled)"MONITORING" else "PAUSED",w.enabled) {
+                performerDb.setEnabled(w.id,!w.enabled);refresh()
+            }))
+            c.addView(gap(5))
+            c.addView(txt("Full videos >= ${w.minSeconds/60} min  ·  ${w.domains().size} sites",12f,muted))
+            if(w.status!=null)c.addView(txt("Last scan: ${w.status}",11f,muted))
+            c.addView(gap(7))
+            c.addView(action("REMOVE PERFORMER",false) {
+                AlertDialog.Builder(this).setMessage("Stop monitoring ${w.name}?")
+                    .setNegativeButton("Cancel",null).setPositiveButton("Remove"){_,_->
+                        performerDb.remove(w.id);refresh()
+                    }.show()
+            })
+            performers.addView(c);performers.addView(gap(8))
+        }
         stats.text="${db.count("queued")} queued     •     ${db.count("running")} downloading     •     ${db.count("done")} saved     •     ${db.count("error")} errors"
         watches.removeAllViews()
         for(w in db.listWatches()){
