@@ -562,6 +562,32 @@ class GalleryDb(context: Context) : SQLiteOpenHelper(context, "galleryflow.db", 
         )
     }
 
+    fun completedForCloud(): List<CloudUploadQueue.Candidate> {
+        val items = mutableListOf<CloudUploadQueue.Candidate>()
+        readableDatabase.query(
+            "media",
+            arrayOf("source", "media_id", "content_uri", "filename", "sha256"),
+            "state=? AND content_uri IS NOT NULL AND sha256 IS NOT NULL",
+            arrayOf(TransferState.COMPLETE.dbValue),
+            null, null, "updated_at DESC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                val filename = cursor.getString(3).orEmpty()
+                val hash = cursor.getString(4).orEmpty()
+                if (filename.isNotBlank() && hash.length == 64) {
+                    items += CloudUploadQueue.Candidate(
+                        source = cursor.getString(0),
+                        mediaId = cursor.getString(1),
+                        contentUri = cursor.getString(2),
+                        originalName = filename,
+                        sha256 = hash
+                    )
+                }
+            }
+        }
+        return items
+    }
+
     fun findCompleteByHash(hash: String): MediaRecord? =
         queryMedia("sha256=? AND state=? AND content_uri IS NOT NULL", arrayOf(hash, TransferState.COMPLETE.dbValue), "1", "updated_at DESC").firstOrNull()
 
