@@ -28,7 +28,11 @@ object SyncControl {
         stopRequested = false
         pendingLive = false
         mode = newMode
-        message = if (newMode == SyncMode.LIVE) "Live Sync starting…" else "Archive Backfill starting…"
+        message = when (newMode) {
+            SyncMode.LIVE -> "Live Sync starting…"
+            SyncMode.BACKFILL -> "Archive Backfill starting…"
+            SyncMode.CLOUD -> "Cloud upload starting…"
+        }
         true
     }
 
