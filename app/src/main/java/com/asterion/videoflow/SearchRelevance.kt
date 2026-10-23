@@ -73,6 +73,10 @@ object SearchRelevance {
         val snippetWords=canonical(evidence.snippet).split(' ').filter{it.isNotBlank()}.toSet()
         if(terms.none{matches(it,titleWords)})
             return Decision(false,"The video title does not contain a requested keyword",0)
+        // Search snippets are broad and can mention unrelated videos. Unless a page-level
+        // video is actually confirmed, require every keyword in the specific video title.
+        if(terms.any{!matches(it,titleWords)} && !evidence.pageVideo)
+            return Decision(false,"All requested keywords must match the video title",0)
         if(terms.any{!matches(it,titleWords)&&!matches(it,snippetWords)})
             return Decision(false,"Missing one or more requested keywords",0)
         val video=isVideoUrl(evidence.url)||evidence.pageVideo
