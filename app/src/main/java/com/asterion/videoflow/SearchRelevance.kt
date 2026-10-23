@@ -19,8 +19,12 @@ object SearchRelevance {
     )
     data class Decision(val accept:Boolean,val reason:String,val score:Int)
 
-    private val generic=setOf("porn","porno","pornographic","xxx","adult","nsfw",
-        "full","video","videos","movie","movies","scene","scenes","watch","hd","free")
+    // Adult search words are content constraints, not blocked keywords.
+    // Navigation/format words are used as modifiers rather than requiring literal title text.
+    private val adultQualifiers=setOf("porn","porno","pornographic","xxx","adult","nsfw")
+    private val generic=setOf("full","video","videos","movie","movies","scene","scenes","watch","hd","free")
+    fun isAdultQualifier(term:String)=term in adultQualifiers
+    fun contentTerms(query:String)=requestedTerms(query).filterNot { isAdultQualifier(it) }
     private val filler=setOf("the","a","an","and","or","with","of","in","on","for","to","is")
     private val adultWords=Regex("""\b(porn|porno|xxx|nsfw|hardcore|hentai|erotic|uncensored|explicit|adult\s*video|sex\s*video|onlyfans|manyvids)\b""",RegexOption.IGNORE_CASE)
     private val mediaExt=Regex("""\.(mp4|m3u8|webm|mov|mpd)([?#]|$)""",RegexOption.IGNORE_CASE)
@@ -63,15 +67,15 @@ object SearchRelevance {
         return AdultSiteCatalog.hosts.any{host==it||host.endsWith("."+it)}
     }
     fun evaluate(query:String, evidence:Evidence):Decision{
-        val terms=requestedTerms(query)
-        if(terms.isEmpty())return Decision(false,"Enter descriptive keywords beyond 'porn video'",0)
+        val terms=contentTerms(query)
+        if(requestedTerms(query).isEmpty())return Decision(false,"Enter descriptive search terms",0)
         val host=runCatching{URI(evidence.url).host?.lowercase(Locale.ROOT)?.removePrefix("www.")}.getOrNull()
             ?:return Decision(false,"Invalid source",0)
         if(urlNoise.any{host==it||host.endsWith("."+it)})return Decision(false,"Not a video destination",0)
         val sourceAdult=adultHost(evidence.url)
         val titleWords=canonical(evidence.title).split(' ').filter{it.isNotBlank()}.toSet()
         val snippetWords=canonical(evidence.snippet).split(' ').filter{it.isNotBlank()}.toSet()
-        if(terms.none{matches(it,titleWords)})
+        if(terms.isNotEmpty() && terms.none{matches(it,titleWords)})
             return Decision(false,"The video title does not contain a requested keyword",0)
         // Search snippets are broad and can mention unrelated videos. Unless a page-level
         // video is actually confirmed, require every keyword in the specific video title.
