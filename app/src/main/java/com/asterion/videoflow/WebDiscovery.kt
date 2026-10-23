@@ -34,8 +34,11 @@ object WebDiscovery {
                 it.startsWith("utm_",true)||it.startsWith("fbclid=",true)||
                     it.startsWith("gclid=",true)
             }?.joinToString("&")?.takeIf{it.isNotBlank()}
-            URI(uri.scheme.lowercase(),uri.rawAuthority,
-                uri.rawPath.ifEmpty{"/"},cleanQuery,null).toASCIIString()
+            buildString {
+                append(uri.scheme.lowercase()).append("://").append(uri.rawAuthority)
+                append(uri.rawPath.ifNullOrBlank{"/"})
+                if(!cleanQuery.isNullOrBlank())append("?").append(cleanQuery)
+            }
         }
     } catch(_:Exception){null}
     fun isVideoPage(url: String): Boolean {
