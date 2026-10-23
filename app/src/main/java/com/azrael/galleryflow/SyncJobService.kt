@@ -13,21 +13,22 @@ import java.util.concurrent.Future
 class SyncJobService : JobService() {
     private val executor = Executors.newSingleThreadExecutor()
     @Volatile private var pendingRun: Future<*>? = null
+    @Volatile private var jobActive = false
 
     override fun onStartJob(params: JobParameters?): Boolean {
         if (params == null || !Prefs.autoSync(this)) return false
 
         if (SyncControl.snapshot().running) {
-            // Existing Backfill/foreground action will service a coalesced Live pass.
-            SyncControl.tryStart(SyncMode.LIVE, queueLiveIfBusy = true)
+            // The next periodic occurrence handles new work after a foreground run.
             return false
         }
-
+        jobActive = true
         pendingRun = executor.submit {
             try {
                 SyncEngine(applicationContext).run(SyncMode.LIVE)
             } finally {
-                jobFinished(params, false)
+                if (jobActive) jobFinished(params, false)
+                jobActive = false
             }
         }
         return true
@@ -35,6 +36,7 @@ class SyncJobService : JobService() {
 
     override fun onStopJob(params: JobParameters?): Boolean {
         if (pendingRun?.isDone == false) {
+            jobActive = false
             SyncControl.stop()
             pendingRun?.cancel(true)
             return true // OS may reschedule unfinished periodic work.
