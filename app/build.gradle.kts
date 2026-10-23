@@ -25,6 +25,7 @@ android {
         }
     }
     buildTypes {
+        debug { applicationIdSuffix = ".preview" }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("videoRelease")
