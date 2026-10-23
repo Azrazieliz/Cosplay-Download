@@ -123,7 +123,9 @@ object VideoSearch {
             evaluated.score,
             if(verifiedVideo)"Player metadata verified" else "Matched adult video title")
     }
-    fun search(query:String,limit:Int=30,onProgress:((String)->Unit)?=null):List<DiscoveryMatch> {
+    private data class Batch(val name:String,val hits:List<Hit>,val error:String?)
+    fun search(query:String,limit:Int=30,onProgress:((String)->Unit)?=null,
+               onSummary:((String)->Unit)?=null):List<DiscoveryMatch> {
         val requested=query.trim().take(180)
         val siteConstraint=Regex("""(?:^|\s)site:([a-z0-9.-]+)""",RegexOption.IGNORE_CASE)
             .find(requested)?.groupValues?.getOrNull(1)?.lowercase(Locale.ROOT)
@@ -164,7 +166,9 @@ object VideoSearch {
         // Parallelize search providers so a blocked index does not stall the whole screen.
         // Threads are short-lived and no site is queried more than once per search.
         val executor=java.util.concurrent.Executors.newFixedThreadPool(6)
-        val completion=java.util.concurrent.ExecutorCompletionService<Pair<String,List<Hit>>>(executor)
+        val completion=java.util.concurrent.ExecutorCompletionService<Batch>(executor)
+        val sourceOutcomes=ArrayList<String>()
+        var rawCandidates=0
         val q=(if(siteConstraint==null)"" else "site:"+siteConstraint+" ")+phrase+" porn full video"
         val encoded=encode(phrase)
         val jobs=ArrayList<Pair<String,()->List<Hit>>>()
@@ -176,7 +180,8 @@ object VideoSearch {
         jobs.add("Eporner" to {firstPartySearch("Eporner","https://www.eporner.com/search/"+encoded+"/")})
         for((name,fetch) in jobs) {
             completion.submit(java.util.concurrent.Callable {
-                name to runCatching {fetch()}.getOrDefault(emptyList())
+                try { Batch(name,fetch(),null) }
+                catch(t:Exception){ Batch(name,emptyList(),t.message?.take(95)?:t.javaClass.simpleName) }
             })
         }
         onProgress?.invoke("Searching adult video sites and wider web indexes…")
@@ -188,13 +193,23 @@ object VideoSearch {
                 val future=completion.poll(remaining,java.util.concurrent.TimeUnit.NANOSECONDS)
                     ?:break
                 val result=runCatching{future.get()}.getOrNull()?:continue
-                onProgress?.invoke("Checking "+result.first+" results for keyword matches…")
-                collect(result.second)
+                rawCandidates+=result.hits.size
+                sourceOutcomes.add(result.name+": "+(result.error?.let{"unavailable ("+it+")"}
+                    ?:result.hits.size.toString()+" candidate links"))
+                onProgress?.invoke("Checking "+result.name+" results for keyword matches…")
+                collect(result.hits)
                 if(found.size>=limit)break
             }
         } finally {
             executor.shutdownNow()
         }
+        val working=sourceOutcomes.count {!it.contains("unavailable (")}
+        onSummary?.invoke(
+            if(working==0) "No search provider returned usable results. Check connectivity or source restrictions. "+sourceOutcomes.take(3).joinToString("; ")
+            else "Sources responded: "+working+"/"+jobs.size+". Candidates inspected: "+rawCandidates+
+                ". Verified relevance matches: "+found.size+". "+
+                sourceOutcomes.filter{it.contains("unavailable (")}.take(2).joinToString("; ")
+        )
         return found.values.sortedWith(compareByDescending<DiscoveryMatch>{it.score}
             .thenBy{it.origin}).take(limit.coerceIn(1,40))
     }
